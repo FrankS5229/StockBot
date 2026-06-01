@@ -1,0 +1,82 @@
+# StockBot 設定檔
+# 觀察標的、指標參數、風控參數。可自行增減標的。
+
+# --- 觀察標的 ---
+# market: TW (台股) 或 US (美股)
+watchlist:
+  - symbol: "0050"
+    market: TW
+    name: "元大台灣50"
+  - symbol: "2330"
+    market: TW
+    name: "台積電 TSMC"
+  - symbol: "NVDA"
+    market: US
+    name: "NVIDIA"
+  - symbol: "QQQ"
+    market: US
+    name: "Invesco QQQ"
+  - symbol: "AAOI"
+    market: US
+    name: "AAOI"
+  - symbol: "GOOGL"
+    market: US
+    name: "Google"
+  - symbol: "TSLA"
+    market: US
+    name: "Tesla"
+  - symbol: "3450"
+    market: TW
+    name: "聯鈞"
+  - symbol: "AMD"
+    market: US
+    name: "AMD"
+
+
+# --- 資料設定 ---
+data:
+  interval: "1d"      # 1d / 1h / 15m ...
+  period: "2y"        # 抓取歷史長度
+  cache_dir: "data/cache"
+
+# --- 策略選擇 ---
+# active 可選：
+#   ema_macd_rsi（EMA+MACD+RSI 順勢動能，短中線）
+#   fibonacci   （黃金分割回撤，順勢低接）
+#   golden_cross（50/200 均線黃金交叉，長期趨勢）
+#   bollinger   （布林通道均值回歸，震盪盤）
+strategy:
+  active: ema_macd_rsi
+
+# --- 指標參數 ---
+indicators:
+  ema_fast: 5
+  ema_slow: 20
+  macd: { fast: 12, slow: 26, signal: 9 }
+  rsi_period: 14
+  bbands: { length: 20, std: 2.0 }
+  atr_period: 14
+
+# --- Fibonacci 策略參數 ---
+fibonacci:
+  lookback: 60       # 取過去幾根 K 線的波段高低
+  entry_low: 0.5     # 進場「黃金回撤區間」下界（較淺回撤）
+  entry_high: 0.618  # 進場「黃金回撤區間」上界（較深回撤）
+  tolerance: 0.01    # 區間邊緣額外緩衝（±1%）
+
+# --- Golden Cross 策略參數 ---
+golden_cross:
+  short: 50          # 短期均線天數
+  long: 200          # 長期均線天數（需至少 long 根資料才會有訊號）
+
+# --- 風控參數 ---
+risk:
+  atr_stop_mult: 1.0       # 停損 = 進場價 - k*ATR
+  reward_risk_ratio: 2.0   # 停利 = 停損距離 * 此倍數
+  risk_per_trade_pct: 1.0  # 單筆風險佔資金 %（1~2 建議）
+
+# --- 回測設定 ---
+backtest:
+  commission_tw: 0.0015    # 台股單邊約 0.15%（含手續費，未含證交稅）
+  commission_us: 0.0005    # 美股單邊約 0.05%
+  out_of_sample_split: 0.8 # 前 80% 訓練 / 後 20% 樣本外

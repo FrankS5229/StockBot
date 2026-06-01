@@ -1,0 +1,21 @@
+# --- Data ---
+yfinance>=0.2.40          # 美股 + 台股(.TW) 行情
+FinMind>=1.7.0            # 台股資料（需免費 token）
+pandas>=2.0
+numpy>=1.24
+pyarrow>=14.0             # parquet 快取
+
+# --- Indicators ---
+# 指標以純 pandas 自行實作（見 indicators/ta.py），不依賴 pandas-ta，
+# 以避開其與 numpy 2.x 的相容性問題。
+
+# --- Backtest ---
+# 回測為自寫的 next-bar 向量化引擎（見 backtest/runner.py），不依賴 backtesting.py。
+
+# --- Dashboard ---
+streamlit>=1.30
+plotly>=5.18
+
+# --- Config / utils ---
+pyyaml>=6.0
+python-dotenv>=1.0

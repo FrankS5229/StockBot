@@ -1,0 +1,24 @@
+# 投資組合輸入範本（通用）
+# 複製本檔為 portfolio.yaml 並填入你自己的持股。
+# 工具不內嵌任何個人財務數字，這份只是格式範例。
+#
+# cost  = 平均成本價（每股）
+# shares = 持有股數
+# currency = TWD 或 USD（用於概覽顯示）
+
+holdings:
+  - symbol: "0050"
+    market: TW
+    shares: 1000
+    cost: 180.0
+    currency: TWD
+  - symbol: "NVDA"
+    market: US
+    shares: 50
+    cost: 150.0
+    currency: USD
+
+# 現金部位（選填，用於配置比例計算）
+cash:
+  - amount: 300000
+    currency: TWD

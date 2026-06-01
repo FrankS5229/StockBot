@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"exit=$?\")",
+      "Bash(cd /d D:\\\\CODE\\\\StockBot)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(rm -f test_out_fibtw.txt test_out_fibtw2.txt)"
+    ]
+  }
+}

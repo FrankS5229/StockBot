@@ -1,0 +1,24 @@
+# Secrets / personal data
+.env
+portfolio.yaml
+user_watchlist.json
+user_portfolio.json
+
+# Cache / logs / 暫存
+data/cache/
+*.parquet
+*.csv
+*.log
+
+# 打包產物（內含個人資料，切勿上傳）
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# 研究資料 / 私人財務文件（不進版控，本機保留）
+docs/research/
