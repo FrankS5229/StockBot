@@ -242,6 +242,17 @@ def _spot_price(symbol: str, market: str) -> float:
         return float("nan")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _usdtwd_rate() -> float:
+    """1 USD 可換多少 TWD（Yahoo `TWD=X`，快取 1 小時）。抓不到回 NaN。"""
+    try:
+        import yfinance as yf
+        df = yf.download("TWD=X", period="5d", interval="1d", progress=False)
+        return float(df["Close"].squeeze().dropna().iloc[-1])
+    except Exception:
+        return float("nan")
+
+
 def _holding_category(h: dict) -> str:
     """庫存的子類別；未自訂則依市場給預設（台股 / 美股）。"""
     c = (h.get("category") or "").strip()
@@ -325,19 +336,29 @@ def panel_portfolio():
         st.info("尚無庫存。可展開上方「✏️ 編輯庫存」直接輸入，或建立 `portfolio.yaml`。")
         return
 
+    # ---- 匯率：以 TWD 為基準，美股市值換算後才能跨幣別加總/比例 ----
+    rate = _usdtwd_rate()
+    fx_ok = (rate == rate) and rate > 0  # 抓得到才換算
+
     # ---- 估值（讀現價；保留庫存儲存順序）----
     rows = []
     for h in holdings:
         px = _spot_price(h["symbol"], h["market"])
         shares, cost = float(h["shares"]), float(h["cost"])
+        cur = (h.get("currency") or ("TWD" if (h.get("market") or "").upper() == "TW" else "USD")).upper()
         mv = px * shares
         pl = (px - cost) * shares
         pl_pct = (px / cost - 1) if cost else float("nan")
+        # 換成 TWD：USD 乘匯率、TWD 不變；匯率抓不到則退回原幣（混算，會警告）
+        fx = (rate if cur == "USD" else 1.0) if fx_ok else 1.0
+        mv_twd = mv * fx
+        cost_base_twd = cost * shares * fx
         rows.append({
             "類別": _holding_category(h),
-            "標的": h["symbol"], "市場": h["market"], "幣別": h.get("currency", ""),
+            "標的": h["symbol"], "市場": h["market"], "幣別": cur,
             "股數": shares, "成本": cost, "現價": round(px, 2),
-            "市值": round(mv, 0), "損益": round(pl, 0),
+            "市值(原幣)": round(mv, 0), "市值TWD": round(mv_twd, 0),
+            "成本基礎TWD": cost_base_twd, "損益(原幣)": round(pl, 0),
             "報酬率": f"{pl_pct:+.1%}" if pl_pct == pl_pct else "—",
         })
     val_df = pd.DataFrame(rows)
@@ -347,35 +368,42 @@ def panel_portfolio():
     picked = st.multiselect("類別篩選", cats, default=cats, key="cat_filter")
     view = val_df[val_df["類別"].isin(picked)] if picked else val_df.iloc[0:0]
 
-    # 總計依篩選後連動（市值取非 NaN；成本基礎 = 成本×股數）
-    total_mv = float(view["市值"].dropna().sum())
-    total_cost = float((view["成本"] * view["股數"])[view["市值"].notna()].sum())
+    # 總計（TWD）依篩選後連動；市值取非 NaN，成本基礎同步對齊
+    ok = view["市值TWD"].notna()
+    total_mv = float(view.loc[ok, "市值TWD"].sum())
+    total_cost = float(view.loc[ok, "成本基礎TWD"].sum())
+    unit = "TWD" if fx_ok else ""
     if total_cost > 0:
         tot_pl = total_mv - total_cost
         m = st.columns(3)
-        m[0].metric("總市值", f"{total_mv:,.0f}")
-        m[1].metric("總損益", f"{tot_pl:,.0f}", f"{tot_pl / total_cost:+.1%}")
+        m[0].metric(f"總市值 {unit}".strip(), f"{total_mv:,.0f}")
+        m[1].metric(f"總損益 {unit}".strip(), f"{tot_pl:,.0f}", f"{tot_pl / total_cost:+.1%}")
         m[2].metric("持股檔數", len(view))
-        st.caption("⚠ 不同幣別未換匯，總計僅供概略參考。")
+        if fx_ok:
+            st.caption(f"💱 美股以 1 USD = {rate:.2f} TWD 換算後加總（匯率每小時更新；現價/成本欄仍為原幣）。")
+        else:
+            st.caption("⚠ 匯率抓取失敗，未換算，不同幣別直接相加，總計僅供概略參考。")
 
     st.markdown("##### 估值明細")
-    st.dataframe(view, use_container_width=True, hide_index=True)
+    show_cols = ["類別", "標的", "市場", "幣別", "股數", "成本", "現價",
+                 "市值(原幣)", "市值TWD", "損益(原幣)", "報酬率"]
+    st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
 
-    # ---- 類別小計 + 配置圓餅（依自訂類別；隨篩選連動）----
-    if not view.empty and float(view["市值"].dropna().sum()) > 0:
-        cat_g = view.groupby("類別")["市值"].sum()
+    # ---- 類別小計 + 配置圓餅（依 TWD 市值；隨篩選連動）----
+    if not view.empty and float(view["市值TWD"].dropna().sum()) > 0:
+        cat_g = view.groupby("類別")["市值TWD"].sum()
         tot = float(cat_g.sum())
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("##### 類別小計")
+            st.markdown(f"##### 類別小計（{unit or '原幣混算'}）")
             cat_tbl = cat_g.reset_index()
-            cat_tbl["市值"] = cat_tbl["市值"].round(0)
+            cat_tbl["市值TWD"] = cat_tbl["市值TWD"].round(0)
             cat_tbl["佔比"] = [f"{v / tot * 100:.1f}%" for v in cat_g.values]
             st.dataframe(cat_tbl, use_container_width=True, hide_index=True)
         with c2:
             fig = go.Figure(data=[go.Pie(labels=cat_g.index, values=cat_g.values, hole=0.4)])
             fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10),
-                              title=dict(text="類別配置", y=0.97))
+                              title=dict(text=f"類別配置（{unit or '原幣'}）", y=0.97))
             st.plotly_chart(fig, use_container_width=True)
 
 
