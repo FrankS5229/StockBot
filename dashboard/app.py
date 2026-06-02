@@ -28,14 +28,13 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from core import (
-    add_holding,
     add_symbol,
     analyze_symbol,
     get_portfolio_holdings,
     load_config,
     load_user_watchlist,
-    remove_holding,
     remove_symbol,
+    save_user_portfolio,
     DEFAULT_STRATEGY,
     STRATEGY_LABELS,
     STRATEGY_REGISTRY,
@@ -46,12 +45,26 @@ from backtest.runner import METRIC_GLOSSARY, run_backtest
 st.set_page_config(page_title="StockBot 看盤儀表板", layout="wide")
 cfg = load_config()
 
-# 回測長度 / K線週期 選項（盤中從略：台股不支援盤中、yfinance 盤中史料有限、年化基準較複雜）
-PERIOD_OPTIONS = ["6mo", "1y", "2y", "5y", "max"]
-INTERVAL_OPTIONS = ["1d", "1wk", "1mo"]
-INTERVAL_LABELS = {"1d": "日線", "1wk": "週線", "1mo": "月線"}
-# 各週期年化用的每年根數（給回測 Sharpe/年化換算；取代先前寫死 252 的限制）
-PERIODS_PER_YEAR = {"1d": 252, "1wk": 52, "1mo": 12}
+# K線週期選項（日/週/月 + 盤中 60/30 分；盤中走 yfinance，延遲約 15 分）
+INTERVAL_OPTIONS = ["1d", "1wk", "1mo", "60m", "30m"]
+INTERVAL_LABELS = {"1d": "日線", "1wk": "週線", "1mo": "月線", "60m": "60 分線", "30m": "30 分線"}
+# 各週期可選的回測長度。盤中受 Yahoo 史料上限：30 分 ≤ ~60 天、60 分 ≤ ~2 年。
+DEFAULT_PERIOD_OPTIONS = ["6mo", "1y", "2y", "5y", "max"]
+PERIOD_OPTIONS_BY_INTERVAL = {
+    "30m": ["5d", "1mo"],
+    "60m": ["1mo", "3mo", "6mo", "1y", "2y"],
+}
+
+
+def _periods_per_year(interval: str, market: str) -> int:
+    """年化用的每年根數。盤中依市場交易時數不同（台股盤中較短）。"""
+    base = {"1d": 252, "1wk": 52, "1mo": 12}
+    if interval in base:
+        return base[interval]
+    tw = market.upper() == "TW"
+    days = 245 if tw else 252
+    per_day = {"30m": 9 if tw else 13, "60m": 5 if tw else 7}.get(interval, 1)
+    return per_day * days
 
 
 # --------------------------------------------------------------------------- #
@@ -181,7 +194,7 @@ def panel_backtest(df: pd.DataFrame, item: dict, label: str):
     market = item["market"]
     bt = cfg.get("backtest", {})
     comm = bt.get("commission_tw" if market == "TW" else "commission_us", 0.001)
-    ppy = PERIODS_PER_YEAR.get(cfg["data"]["interval"], 252)  # 依週期年化，避免寫死 252
+    ppy = _periods_per_year(cfg["data"]["interval"], market)  # 依週期+市場年化，避免寫死 252
     res = run_backtest(df, commission=comm, slippage=0.0005, periods_per_year=ppy)
     s = res.summary()
 
@@ -229,38 +242,81 @@ def _spot_price(symbol: str, market: str) -> float:
         return float("nan")
 
 
+def _holding_category(h: dict) -> str:
+    """庫存的子類別；未自訂則依市場給預設（台股 / 美股）。"""
+    c = (h.get("category") or "").strip()
+    if c:
+        return c
+    return "台股" if (h.get("market") or "").upper() == "TW" else "美股"
+
+
 def panel_portfolio():
     st.subheader("💼 投資組合概覽")
 
-    # ---- 新增庫存表單 ----
-    with st.expander("➕ 新增 / 更新庫存", expanded=False):
-        with st.form("add_holding_form", clear_on_submit=True):
-            c = st.columns([2, 1, 1, 1])
-            h_sym = c[0].text_input("代號", placeholder="如 NVDA / 2330")
-            h_mkt = c[1].selectbox("市場", ["US", "TW"])
-            h_shares = c[2].number_input("股數", min_value=0.0, step=1.0, value=0.0)
-            h_cost = c[3].number_input("平均成本", min_value=0.0, step=1.0, value=0.0)
-            submitted = st.form_submit_button("加入庫存")
-        if submitted and h_sym.strip() and h_shares > 0:
-            sym_u = h_sym.strip().upper()
-            probe = _spot_price(sym_u, h_mkt)
-            if probe != probe:  # NaN → 抓不到
-                st.error(f"抓不到 {sym_u}（{h_mkt}）的報價，請確認代號與市場。")
-            elif add_holding(sym_u, h_mkt, h_shares, h_cost):
-                st.success(f"已加入/更新 {sym_u}（{h_mkt}）")
-                st.cache_data.clear()
-                st.rerun()
-        elif submitted:
-            st.warning("請填入代號與大於 0 的股數。")
-
     holdings = get_portfolio_holdings()
-    if not holdings:
-        st.info(
-            "尚無庫存。可用上方「➕ 新增庫存」直接輸入，或建立 `portfolio.yaml`。"
-            "本工具不會內嵌任何個人財務數字。"
+
+    # ---- 可隱藏的編輯表單（無庫存時自動展開，有庫存時收合）----
+    with st.expander("✏️ 編輯庫存（新增 / 修改 / 刪除）", expanded=not holdings):
+        st.caption(
+            "直接新增列 / 改數字 / 刪列，按「💾 儲存」生效（存到 `user_portfolio.json`）。"
+            "「類別」可自訂分組（如 台股 / 美股 / ETF / AI…），留空則依市場自動歸類。"
+            "首次以 `portfolio.yaml` 為初始內容；存過後以你編輯的為準。"
         )
+        edit_df = pd.DataFrame(
+            [
+                {
+                    "代號": h.get("symbol", ""),
+                    "市場": (h.get("market") or "US").upper(),
+                    "類別": _holding_category(h),
+                    "股數": float(h.get("shares", 0) or 0),
+                    "成本": float(h.get("cost", 0) or 0),
+                    "幣別": (h.get("currency") or "").upper(),
+                }
+                for h in holdings
+            ],
+            columns=["代號", "市場", "類別", "股數", "成本", "幣別"],
+        )
+        edited = st.data_editor(
+            edit_df, num_rows="dynamic", use_container_width=True, hide_index=True,
+            key="holdings_editor",
+            column_config={
+                "代號": st.column_config.TextColumn("代號", help="美股如 NVDA；台股如 2330", required=True),
+                "市場": st.column_config.SelectboxColumn("市場", options=["US", "TW"], required=True),
+                "類別": st.column_config.TextColumn("類別", help="自訂分組，留空依市場（台股/美股）"),
+                "股數": st.column_config.NumberColumn("股數", min_value=0.0, step=1.0),
+                "成本": st.column_config.NumberColumn("平均成本", min_value=0.0, step=0.01, format="%.2f"),
+                "幣別": st.column_config.SelectboxColumn("幣別（留空自動）", options=["TWD", "USD"]),
+            },
+        )
+        if st.button("💾 儲存庫存變更"):
+            recs = []
+            for r in edited.to_dict("records"):
+                sym = str(r.get("代號") or "").strip().upper()
+                mkt = str(r.get("市場") or "").strip().upper()
+                try:
+                    shares = float(r.get("股數") or 0)
+                    cost = float(r.get("成本") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not sym or mkt not in ("US", "TW") or shares <= 0:
+                    continue  # 跳過空白/無效列
+                cur = str(r.get("幣別") or "").strip().upper() or ("TWD" if mkt == "TW" else "USD")
+                rec = {"symbol": sym, "market": mkt, "shares": shares, "cost": cost, "currency": cur}
+                cat = str(r.get("類別") or "").strip()
+                if cat:
+                    rec["category"] = cat
+                recs.append(rec)
+            save_user_portfolio(recs)
+            st.session_state.pop("holdings_editor", None)  # 清掉編輯器暫存，避免套用到舊資料
+            st.cache_data.clear()
+            st.success(f"已儲存 {len(recs)} 筆庫存。")
+            st.rerun()
+
+    if not holdings:
+        st.info("尚無庫存。可展開上方「✏️ 編輯庫存」直接輸入，或建立 `portfolio.yaml`。")
         return
 
+    # ---- 估值（讀現價）----
     rows = []
     total_mv = total_cost = 0.0
     for h in holdings:
@@ -273,43 +329,41 @@ def panel_portfolio():
             total_mv += mv
             total_cost += cost * shares
         rows.append({
+            "類別": _holding_category(h),
             "標的": h["symbol"], "市場": h["market"], "幣別": h.get("currency", ""),
             "股數": shares, "成本": cost, "現價": round(px, 2),
             "市值": round(mv, 0), "損益": round(pl, 0),
             "報酬率": f"{pl_pct:+.1%}" if pl_pct == pl_pct else "—",
         })
-    df = pd.DataFrame(rows)
+    val_df = pd.DataFrame(rows)
 
-    # 總覽指標
     if total_cost > 0:
         tot_pl = total_mv - total_cost
         m = st.columns(3)
         m[0].metric("總市值", f"{total_mv:,.0f}")
         m[1].metric("總損益", f"{tot_pl:,.0f}", f"{tot_pl / total_cost:+.1%}")
-        m[2].metric("持股檔數", len(df))
+        m[2].metric("持股檔數", len(val_df))
         st.caption("⚠ 不同幣別未換匯，總計僅供概略參考。")
 
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.markdown("##### 估值明細")
+    st.dataframe(val_df.sort_values("類別"), use_container_width=True, hide_index=True)
 
-    # 配置比例（接在表格下方，避免被其他區塊擠壓）
-    if not df.empty:
-        alloc = df.groupby("標的")["市值"].sum()
-        fig = go.Figure(data=[go.Pie(labels=alloc.index, values=alloc.values, hole=0.4)])
-        fig.update_layout(
-            height=340, margin=dict(l=10, r=10, t=46, b=10),
-            title=dict(text="持股市值配置", y=0.97),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # ---- 移除庫存（放最底，避免蓋住上方配置圖）----
-    with st.expander("🗑 移除庫存", expanded=False):
-        for h in holdings:
-            col_a, col_b = st.columns([3, 1])
-            col_a.write(f"{h['symbol']}（{h['market']}）{h['shares']} 股")
-            if col_b.button("移除", key=f"rmh_{h['symbol']}_{h['market']}"):
-                remove_holding(h["symbol"], h["market"])
-                st.cache_data.clear()
-                st.rerun()
+    # ---- 類別小計 + 配置圓餅（依自訂類別）----
+    if not val_df.empty and float(val_df["市值"].sum()) > 0:
+        cat_g = val_df.groupby("類別")["市值"].sum()
+        tot = float(cat_g.sum())
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("##### 類別小計")
+            cat_tbl = cat_g.reset_index()
+            cat_tbl["市值"] = cat_tbl["市值"].round(0)
+            cat_tbl["佔比"] = [f"{v / tot * 100:.1f}%" for v in cat_g.values]
+            st.dataframe(cat_tbl, use_container_width=True, hide_index=True)
+        with c2:
+            fig = go.Figure(data=[go.Pie(labels=cat_g.index, values=cat_g.values, hole=0.4)])
+            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10),
+                              title=dict(text="類別配置", y=0.97))
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -346,7 +400,17 @@ st.caption("技術指標訊號輔助 + 回測。僅供參考，不構成投資�
 options = _watch_options()
 with st.sidebar:
     st.header("設定")
-    label = st.selectbox("選擇標的", list(options.keys()))
+    # 記住選到的標的：用 ?symbol= 還原（連瀏覽器 F5 都不會跳回第一個）
+    labels = list(options.keys())
+    qp_sym = st.query_params.get("symbol")
+    sym_idx = 0
+    if qp_sym:
+        for i, it in enumerate(options.values()):
+            if it["symbol"].upper() == qp_sym.upper():
+                sym_idx = i
+                break
+    label = st.selectbox("選擇標的", labels, index=sym_idx, key="sel_symbol")
+    st.query_params["symbol"] = options[label]["symbol"]  # 寫回網址，下次/重整還原
 
     # ---- 策略選擇（全域：影響 K線/訊號/回測）----
     strat_names = list(STRATEGY_REGISTRY.keys())
@@ -359,18 +423,20 @@ with st.sidebar:
     if chosen != cfg["strategy"]["active"]:
         cfg["strategy"]["active"] = chosen  # 全域生效（_analyze 以策略名為 cache key）
 
-    # ---- 回測長度 / K線週期（全域：影響 K線/訊號/回測）----
+    # ---- K線週期 / 回測長度（全域：影響 K線/訊號/回測）----
+    # 先選週期，再依週期提供合法的回測長度（盤中受 Yahoo 史料上限）
     d = cfg["data"]
-    p_idx = PERIOD_OPTIONS.index(d["period"]) if d["period"] in PERIOD_OPTIONS else PERIOD_OPTIONS.index("2y")
     i_idx = INTERVAL_OPTIONS.index(d["interval"]) if d["interval"] in INTERVAL_OPTIONS else 0
-    d["period"] = st.selectbox(
-        "回測長度", PERIOD_OPTIONS, index=p_idx,
-        help="抓多久的歷史資料來畫圖與回測，也決定「買進持有對照」抱多久。越長樣本越足（建議 ≥2 年）。",
-    )
     d["interval"] = st.selectbox(
         "K線週期", INTERVAL_OPTIONS, index=i_idx,
         format_func=lambda x: INTERVAL_LABELS.get(x, x),
-        help="K 線與訊號的時間單位。台股不支援盤中資料，故僅提供日／週／月線。",
+        help="日/週/月線史料完整；30/60 分線為 Yahoo 盤中資料、延遲約 15 分（30 分僅近 ~60 天、60 分約 ~2 年）。",
+    )
+    period_opts = PERIOD_OPTIONS_BY_INTERVAL.get(d["interval"], DEFAULT_PERIOD_OPTIONS)
+    p_idx = period_opts.index(d["period"]) if d["period"] in period_opts else 0
+    d["period"] = st.selectbox(
+        "回測長度", period_opts, index=p_idx,
+        help="抓多久的歷史來畫圖與回測，也決定「買進持有對照」抱多久。盤中週期的上限由 Yahoo 限制。",
     )
 
     if st.button("🔄 清除快取重新抓資料"):

@@ -166,16 +166,17 @@ def remove_holding(symbol: str, market: str) -> None:
 
 
 def get_portfolio_holdings() -> list[dict]:
-    """合併 portfolio.yaml 與 user_portfolio.json，以 (symbol, market) 去重（user 優先）。"""
-    yaml_pf = load_portfolio()
-    base = (yaml_pf or {}).get("holdings", []) if yaml_pf else []
+    """取得庫存清單。
+
+    一旦使用者透過介面存過庫存（`user_portfolio.json` 非空），即**以它為準**——
+    介面可完整新增/修改/刪除（這也根治了「portfolio.yaml 來源的持股按移除無效」）。
+    若使用者還沒存過（user json 為空），則回退到 `portfolio.yaml` 當初始種子。
+    """
     user = load_user_portfolio()
-    by_key: dict[tuple, dict] = {}
-    for h in base:
-        by_key[(h["symbol"].upper(), h.get("market", "").upper())] = h
-    for h in user:  # user 覆蓋同鍵
-        by_key[(h["symbol"].upper(), h["market"].upper())] = h
-    return list(by_key.values())
+    if user:
+        return user
+    yaml_pf = load_portfolio()
+    return (yaml_pf or {}).get("holdings", []) if yaml_pf else []
 
 
 def get_strategy(cfg: dict):

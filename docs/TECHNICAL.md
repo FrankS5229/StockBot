@@ -70,10 +70,11 @@ user_watchlist.json ─┤(合併)
 ## 4. 資料層細節
 
 - **標準化輸出**：DatetimeIndex（升冪、去重）+ 欄位 `open/high/low/close/volume`，全轉數值。
-- **路由**：`market="US"` → yfinance；`market="TW"` → FinMind（僅日線），失敗退回 yfinance `.TW`。
+- **路由**：`market="US"` → yfinance；`market="TW"` 日線 → FinMind，失敗或**盤中（30m/60m）** → yfinance。
+- **台股代號後綴**：yfinance 對台股先試上市 `.TW`，抓不到再試上櫃 `.TWO`（OTC）。⚠ 上櫃股第一次試 `.TW` 會在 console 印 404 警告（正常，隨即由 `.TWO` 成功）。
+- **盤中資料（yfinance/Yahoo）**：延遲約 15 分、非真即時；史料上限 **30m ≤ ~60 天、60m ≤ ~2 年**（儀表板的「回測長度」選單已依週期夾制）。
 - **FinMind 重複欄位**：回傳會有重複 `close`，以 `~columns.duplicated()` 去重。
-- **快取**：`data/cache/{market}_{symbol}_{interval}_{period}.parquet`，**當日有效**（隔日自動重抓）。
-  無 pyarrow 時退回 csv。
+- **快取**：`data/cache/{market}_{symbol}_{interval}_{period}.parquet`。日/週/月線**當日有效**；**盤中（`_is_intraday`）改 15 分鐘失效**。無 pyarrow 時退回 csv。
 - **台股 token**：建議 `.env` 設 `FINMIND_TOKEN`；未設時免費額度有限，fallback 會 `warnings.warn`。
 
 ---
@@ -184,11 +185,11 @@ scanner/dashboard 透過介面呼叫，無需改動。
 
 ## 11. 已知限制
 
-- VWAP 為日線滾動近似，非標準盤中累積版。
+- VWAP 為**滾動近似**，非標準盤中累積版；改用 30/60 分線時 VWAP 意義更接近盤中但仍是近似（待辦：每日重置累積版）。
 - 回測為 long-only、單標的、全倉進出（未做部位大小/多標的組合）。
 - 台股資料品質依賴 FinMind token；免 token 額度有限。
 - 第一版策略為 baseline，未必優於買進持有，需調參。
 - 手畫線（Plotly 工具列）重整後不保存。
 - **「買進持有對照」= 整段回測期間抱滿**（第一根買、最後一根賣），期間長度由 `data.period` 決定；**儀表板側邊欄已可直接調整「回測長度」與「K線週期」**（2026-06-01），改 yaml 為備用方式。
-- **年化基準依週期套用**：儀表板用 `PERIODS_PER_YEAR`（日 252／週 52／月 12）推算 `periods_per_year` 傳給 `run_backtest`，取代先前寫死 252。盤中（小時/分鐘）刻意未開放（台股不支援盤中、yfinance 盤中史料有限），故 `runner.py` 預設仍為 252。
+- **年化基準依週期+市場套用**：儀表板 `_periods_per_year(interval, market)`（日 252／週 52／月 12；盤中：台股 30分9/60分5 根·美股 13/7，乘交易日）推算 `periods_per_year` 傳給 `run_backtest`，取代先前寫死 252。⚠ 盤中年化/Sharpe 本質噪音大（短窗放大），僅供參考。`runner.py` 預設仍為 252。
 - **Fibonacci 進場已由「0.618±2% 單線」放寬為「0.5–0.618 黃金回撤區間」**（2026-06-01）；區間上下界與緩衝由 `config.yaml` 的 `entry_low`/`entry_high`/`tolerance` 控制。實測買點數明顯增加（NVDA 11→19、QQQ 0→4）。回測期間仍建議拉長到 3–5 年（透過儀表板期間選單或改 `data.period`）以取得更足樣本。

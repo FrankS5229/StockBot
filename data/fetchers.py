@@ -23,6 +23,13 @@ STD_COLS = ["open", "high", "low", "close", "volume"]
 
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 
+# 盤中（分鐘/小時）週期：快取有效期較短，且 Yahoo 史料有上限
+_INTRADAY_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+
+
+def _is_intraday(interval: str) -> bool:
+    return interval in _INTRADAY_INTERVALS
+
 
 # --------------------------------------------------------------------------- #
 # 對外主函式
@@ -57,7 +64,9 @@ def get_ohlcv(
     cache_file = cdir / f"{market}_{symbol}_{interval}_{period}.parquet"
 
     if use_cache:
-        cached = _load_cache(cache_file)
+        # 盤中資料 15 分鐘失效；日/週/月線當日有效
+        max_age = 900 if _is_intraday(interval) else None
+        cached = _load_cache(cache_file, max_age)
         if cached is not None:
             return cached
 
@@ -85,14 +94,19 @@ def _fetch_yfinance(symbol: str, market: str, interval: str, period: str) -> pd.
     except ImportError as e:  # pragma: no cover
         raise ImportError("需要安裝 yfinance：pip install yfinance") from e
 
-    ticker = f"{symbol}.TW" if market == "TW" else symbol
-    df = yf.download(
-        ticker,
-        period=period,
-        interval=interval,
-        auto_adjust=True,
-        progress=False,
-    )
+    # 台股：先試上市 .TW，抓不到再試上櫃 .TWO；美股用原代號
+    candidates = [f"{symbol}.TW", f"{symbol}.TWO"] if market == "TW" else [symbol]
+    df = None
+    for ticker in candidates:
+        df = yf.download(
+            ticker,
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            progress=False,
+        )
+        if df is not None and not df.empty:
+            break
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -190,13 +204,20 @@ def _period_to_start(period: str) -> datetime:
     return now - timedelta(days=365 * 2)  # 預設兩年
 
 
-def _load_cache(path: Path) -> pd.DataFrame | None:
-    """若快取存在且為今日產生，直接讀回。"""
+def _load_cache(path: Path, max_age: float | None = None) -> pd.DataFrame | None:
+    """讀回快取。
+
+    max_age 給秒數時：超過該秒數即過期（盤中用，預設 15 分鐘）。
+    max_age 為 None 時：當日有效、隔日過期（日/週/月線用）。
+    """
     if not path.exists():
         return None
     mtime = datetime.fromtimestamp(path.stat().st_mtime)
-    if mtime.date() != datetime.now().date():
-        return None  # 過期 → 重新抓
+    if max_age is not None:
+        if (datetime.now() - mtime).total_seconds() > max_age:
+            return None  # 盤中過期 → 重新抓
+    elif mtime.date() != datetime.now().date():
+        return None  # 隔日過期 → 重新抓
     try:
         return pd.read_parquet(path)
     except Exception:

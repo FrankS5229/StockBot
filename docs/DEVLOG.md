@@ -133,6 +133,15 @@ pandas 自動對齊 → OHLC 整欄變 NaN。後果：ema/fib 的「buy 停損�
 
 ---
 
+## A/B 待辦推進（2026-06-02）
+
+- **上 GitHub**：`ShenBYFrank/StockBot`。過程擋掉兩個外洩：`StockBot.zip`（含個資）未上傳；研究報告含個人財務數字曾誤入歷史，已 force-push 壓成單一乾淨 commit 清除。`docs/research/` 整個資料夾改為 git 忽略。
+- **A2 記住標的**：selectbox 加 `key="sel_symbol"` + `st.query_params`（`?symbol=`），F5/重開可還原。
+- **B1 投組統一編輯**：投組分頁改 `st.data_editor`（dynamic rows）新增/改/刪三合一 +「💾 儲存」寫 `user_portfolio.json`；`get_portfolio_holdings` 改為「user json 非空則以它為準，否則用 `portfolio.yaml` 種子」→ **根治 yaml 來源持股刪不掉**。
+- **B2 盤中 30/60 分線**：interval 選單加 30/60 分、回測長度依週期動態夾制、`_periods_per_year(interval, market)` 市場感知、`_fetch_yfinance` 台股 `.TW`→`.TWO` 退回、盤中快取 15 分。實測 US 30m/60m、TW 0050 60m、上櫃 6488/8069（.TWO）皆正常。Yahoo 盤中延遲 ~15 分、非真即時。
+
+---
+
 ## 待辦 / 下一步
 
 👉 **未完成事項與下一步統一列於 [`STATUS.md`](../STATUS.md)**（開新工作階段先看那份）。
