@@ -136,7 +136,13 @@ def _metrics(eq: pd.Series, trades: pd.DataFrame, ppy: int) -> BacktestResult:
     total_return = float(eq.iloc[-1] - 1) if len(eq) else 0.0
 
     n = len(eq)
-    annual_return = (eq.iloc[-1] ** (ppy / n) - 1) if n > 1 and eq.iloc[-1] > 0 else 0.0
+    final = float(eq.iloc[-1])
+    if n > 1 and final > 0:
+        # 至少約半年資料才年化，避免短窗（如 5d 盤中）外推出 250%+ 的無意義暴衝值；
+        # 資料太短時直接回報期間總報酬（不外推）。
+        annual_return = final ** (ppy / n) - 1 if n >= ppy / 2 else final - 1
+    else:
+        annual_return = 0.0
 
     daily_ret = eq.pct_change().dropna()
     if len(daily_ret) > 1 and daily_ret.std() > 0:

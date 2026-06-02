@@ -359,7 +359,9 @@ def panel_portfolio():
             "股數": shares, "成本": cost, "現價": round(px, 2),
             "市值(原幣)": round(mv, 0), "市值TWD": round(mv_twd, 0),
             "成本基礎TWD": cost_base_twd, "損益(原幣)": round(pl, 0),
-            "報酬率": f"{pl_pct:+.1%}" if pl_pct == pl_pct else "—",
+            # 存「百分比數值」float（如 9.0 代表 +9.0%），顯示交給 NumberColumn 格式化；
+            # 不要存格式化字串，否則使用者點欄位標頭排序會變字串排序（"+9.0%" 排在 "+30.0%" 前）。
+            "報酬率": pl_pct * 100 if pl_pct == pl_pct else float("nan"),
         })
     val_df = pd.DataFrame(rows)
 
@@ -387,7 +389,12 @@ def panel_portfolio():
     st.markdown("##### 估值明細")
     show_cols = ["類別", "標的", "市場", "幣別", "股數", "成本", "現價",
                  "市值(原幣)", "市值TWD", "損益(原幣)", "報酬率"]
-    st.dataframe(view[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(
+        view[show_cols], use_container_width=True, hide_index=True,
+        column_config={
+            "報酬率": st.column_config.NumberColumn("報酬率", format="%.1f%%"),
+        },
+    )
 
     # ---- 類別小計 + 配置圓餅（依 TWD 市值；隨篩選連動）----
     if not view.empty and float(view["市值TWD"].dropna().sum()) > 0:

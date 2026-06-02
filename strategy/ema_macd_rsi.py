@@ -56,11 +56,12 @@ class EmaMacdRsiStrategy(Strategy):
 
         buy = ema_bull & above_vwap & hist_up & rsi_ok
 
-        # 出場條件
+        # 出場條件——全部用「穿越事件」（shift(1) 確認前一根尚未成立），只在剛轉弱那一根觸發一次；
+        # 否則 below_vwap / rsi_weak / ema_bear 這類「持續狀態」會在空手期間每根都冒 sell（誤導當前訊號面板）。
         hist_down = (out["macd_hist"] < 0) & (out["macd_hist"].shift(1) >= 0)
-        below_vwap = out["close"] < out["vwap"]
-        rsi_weak = out["rsi"] < self.rsi_low
-        ema_bear = out["ema_fast"] < out["ema_slow"]
+        below_vwap = (out["close"] < out["vwap"]) & (out["close"].shift(1) >= out["vwap"].shift(1))
+        rsi_weak = (out["rsi"] < self.rsi_low) & (out["rsi"].shift(1) >= self.rsi_low)
+        ema_bear = (out["ema_fast"] < out["ema_slow"]) & (out["ema_fast"].shift(1) >= out["ema_slow"].shift(1))
         sell = hist_down | below_vwap | rsi_weak | ema_bear
 
         # 停損/停利（以當根 ATR 估算，buy 訊號才填）

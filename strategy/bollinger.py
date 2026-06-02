@@ -43,9 +43,10 @@ class BollingerStrategy(Strategy):
 
         # 站回下軌事件：前一根收盤在下軌之下、本根收回下軌之上（用 shift(1) 防未來資料）
         cross_back_up = (close > lower) & (close.shift(1) <= lower.shift(1)) & lower.notna()
-        # 出場：回到中軌（停利）或再度跌破下軌（停損）
-        reach_mid = close >= mid
-        below_lower = close < lower
+        # 出場：回到中軌（停利）或再度跌破下軌（停損）——皆用穿越事件（shift(1) 確認前一根尚未成立），
+        # 避免「持續站在中軌上方／持續貼著下軌」時每根都冒 sell（空手期間誤顯示賣訊）。
+        reach_mid = (close >= mid) & (close.shift(1) < mid)
+        below_lower = (close < lower) & (close.shift(1) >= lower.shift(1))
         sell = (reach_mid | below_lower) & mid.notna()
 
         out["signal"] = "hold"
