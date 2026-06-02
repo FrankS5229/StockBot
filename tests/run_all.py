@@ -41,7 +41,7 @@ def main():
     print("=== core ===")
     test_core.test_strategy_registry()
     test_core.test_portfolio_crud()
-    test_core.test_get_portfolio_holdings_merge()
+    test_core.test_get_portfolio_holdings_user_priority()
 
     print("=== backtest ===")
     test_backtest.test_next_bar_execution_and_profit()

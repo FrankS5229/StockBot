@@ -1,7 +1,7 @@
 # STATUS — 從這裡接續
 
 > 開新工作階段先看這份：現在做到哪、下一步做什麼、怎麼跑起來。
-> 最後更新：**2026-06-01**。完整歷史見 [`docs/DEVLOG.md`](docs/DEVLOG.md)。
+> 最後更新：**2026-06-02**。完整歷史見 [`docs/DEVLOG.md`](docs/DEVLOG.md)。
 
 ---
 
@@ -43,10 +43,10 @@
 - [x] **投組庫存統一編輯** ✅：`st.data_editor`（dynamic rows）三合一（新增/改/刪）+「💾 儲存」寫回 `user_portfolio.json`；`get_portfolio_holdings` 改為「user json 非空則以它為準，否則用 portfolio.yaml 種子」，根治刪不掉（2026-06-02）。
 - [x] **盤中 30/60 分線（Yahoo / yfinance）** ✅（2026-06-02）：interval 選單加 30/60 分；回測長度依週期動態夾制（30 分→5d/1mo、60 分→1mo~2y）；年化 `_periods_per_year(interval, market)` 依市場分（台股盤中每天 30分9/60分5 根、美股 13/7）；`_fetch_yfinance` 台股 `.TW`→`.TWO` 退回（上櫃）；盤中快取 15 分。⚠ Yahoo 延遲 ~15 分、非真即時。**選用未做**：VWAP 改每日重置累積版。
 - [ ] **訊號通知**：選定管道並實作 `Notifier`（Discord Webhook 最簡單）。`notify/base.py` 介面已備。
-- [ ] 依回測再調策略參數（Fibonacci 區間、EMA 週期、ATR 倍數）或加趨勢濾網。
-- [ ] 投資組合表單刪除功能缺失，刪改後市值及損益並沒有更著改動，需修改。
-- [ ] 投資組合表單加入拖曳功能，使用者可以自行拖曳列。
-- [ ] 投資組合表單中**類別**加入filter功能。
+- [x] **依回測調策略參數** ✅（2026-06-02，5y 日線 10 檔掃參）：ema_macd_rsi RSI 進場帶 50-70→**45-75**（Sharpe 中位 0.601→0.657、年化 0.096→0.11）；fibonacci 進場區間 0.5→**0.382**-0.618（Sharpe 0.5→0.741、年化 0.146→0.176、交易 138→203）。**發現**：①趨勢濾網 close>SMA200 反而變差→不用；②EMA 週期 5/20≈20/50 差距小→維持；③`atr_stop_mult`/`reward_risk_ratio` 只是顯示建議、**不入回測**（回測只依 buy/sell 訊號）。
+- [x] **投組刪改即時連動** ✅（2026-06-02）：根因是「存空清單被當 falsy → 退回 yaml 種子」；`get_portfolio_holdings` 改以**檔案存在**判斷，全刪存空也成立；存檔後 `cache_data.clear()`+`rerun` 重算市值/損益。測試補「全刪不復活」斷言。
+- [x] **投組列排序** ✅（2026-06-02）：`st.data_editor` 加「排序」數字欄，存檔依值重排並持久化（Streamlit data_editor 無原生滑鼠拖曳，採數字排序為等效解；如要真拖曳需加 `streamlit-sortables` 元件）。
+- [x] **投組類別 filter** ✅（2026-06-02）：估值明細上方加類別多選；篩選連動估值表 / 總市值損益 / 類別小計圓餅。
 
 ### C. 進階資料源 / 看盤（選用）
 - [ ] **TWSE MIS 即時現價**：近即時快照（秒級）→ 做「部位即時市值 / 現價標籤」，接 dashboard `_spot_price`，純顯示 + `st.fragment` 自動刷新；需判斷上市(`tse_`)/上櫃(`otc_`)。屬附加層，**不動 bar 管線**。

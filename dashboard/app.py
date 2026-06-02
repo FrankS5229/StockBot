@@ -262,9 +262,11 @@ def panel_portfolio():
             "「類別」可自訂分組（如 台股 / 美股 / ETF / AI…），留空則依市場自動歸類。"
             "首次以 `portfolio.yaml` 為初始內容；存過後以你編輯的為準。"
         )
+        st.caption("「排序」欄填數字即可重新排列（小→大）；存檔後估值與圖表都依此順序。")
         edit_df = pd.DataFrame(
             [
                 {
+                    "排序": i + 1,
                     "代號": h.get("symbol", ""),
                     "市場": (h.get("market") or "US").upper(),
                     "類別": _holding_category(h),
@@ -272,14 +274,15 @@ def panel_portfolio():
                     "成本": float(h.get("cost", 0) or 0),
                     "幣別": (h.get("currency") or "").upper(),
                 }
-                for h in holdings
+                for i, h in enumerate(holdings)
             ],
-            columns=["代號", "市場", "類別", "股數", "成本", "幣別"],
+            columns=["排序", "代號", "市場", "類別", "股數", "成本", "幣別"],
         )
         edited = st.data_editor(
             edit_df, num_rows="dynamic", use_container_width=True, hide_index=True,
             key="holdings_editor",
             column_config={
+                "排序": st.column_config.NumberColumn("排序", help="填數字重排（小→大）", min_value=1, step=1, width="small"),
                 "代號": st.column_config.TextColumn("代號", help="美股如 NVDA；台股如 2330", required=True),
                 "市場": st.column_config.SelectboxColumn("市場", options=["US", "TW"], required=True),
                 "類別": st.column_config.TextColumn("類別", help="自訂分組，留空依市場（台股/美股）"),
@@ -289,8 +292,8 @@ def panel_portfolio():
             },
         )
         if st.button("💾 儲存庫存變更"):
-            recs = []
-            for r in edited.to_dict("records"):
+            staged = []
+            for pos, r in enumerate(edited.to_dict("records")):
                 sym = str(r.get("代號") or "").strip().upper()
                 mkt = str(r.get("市場") or "").strip().upper()
                 try:
@@ -305,7 +308,13 @@ def panel_portfolio():
                 cat = str(r.get("類別") or "").strip()
                 if cat:
                     rec["category"] = cat
-                recs.append(rec)
+                try:
+                    order = float(r.get("排序"))
+                except (TypeError, ValueError):
+                    order = float("inf")  # 沒填排序的列排到最後（保留輸入次序）
+                staged.append((order, pos, rec))
+            staged.sort(key=lambda t: (t[0], t[1]))  # 依排序值；同值維持原列序（穩定）
+            recs = [rec for _, _, rec in staged]
             save_user_portfolio(recs)
             st.session_state.pop("holdings_editor", None)  # 清掉編輯器暫存，避免套用到舊資料
             st.cache_data.clear()
@@ -316,18 +325,14 @@ def panel_portfolio():
         st.info("尚無庫存。可展開上方「✏️ 編輯庫存」直接輸入，或建立 `portfolio.yaml`。")
         return
 
-    # ---- 估值（讀現價）----
+    # ---- 估值（讀現價；保留庫存儲存順序）----
     rows = []
-    total_mv = total_cost = 0.0
     for h in holdings:
         px = _spot_price(h["symbol"], h["market"])
         shares, cost = float(h["shares"]), float(h["cost"])
         mv = px * shares
         pl = (px - cost) * shares
         pl_pct = (px / cost - 1) if cost else float("nan")
-        if mv == mv:
-            total_mv += mv
-            total_cost += cost * shares
         rows.append({
             "類別": _holding_category(h),
             "標的": h["symbol"], "市場": h["market"], "幣別": h.get("currency", ""),
@@ -337,20 +342,28 @@ def panel_portfolio():
         })
     val_df = pd.DataFrame(rows)
 
+    # ---- 類別篩選（多選；預設全選）----
+    cats = sorted(val_df["類別"].unique().tolist())
+    picked = st.multiselect("類別篩選", cats, default=cats, key="cat_filter")
+    view = val_df[val_df["類別"].isin(picked)] if picked else val_df.iloc[0:0]
+
+    # 總計依篩選後連動（市值取非 NaN；成本基礎 = 成本×股數）
+    total_mv = float(view["市值"].dropna().sum())
+    total_cost = float((view["成本"] * view["股數"])[view["市值"].notna()].sum())
     if total_cost > 0:
         tot_pl = total_mv - total_cost
         m = st.columns(3)
         m[0].metric("總市值", f"{total_mv:,.0f}")
         m[1].metric("總損益", f"{tot_pl:,.0f}", f"{tot_pl / total_cost:+.1%}")
-        m[2].metric("持股檔數", len(val_df))
+        m[2].metric("持股檔數", len(view))
         st.caption("⚠ 不同幣別未換匯，總計僅供概略參考。")
 
     st.markdown("##### 估值明細")
-    st.dataframe(val_df.sort_values("類別"), use_container_width=True, hide_index=True)
+    st.dataframe(view, use_container_width=True, hide_index=True)
 
-    # ---- 類別小計 + 配置圓餅（依自訂類別）----
-    if not val_df.empty and float(val_df["市值"].sum()) > 0:
-        cat_g = val_df.groupby("類別")["市值"].sum()
+    # ---- 類別小計 + 配置圓餅（依自訂類別；隨篩選連動）----
+    if not view.empty and float(view["市值"].dropna().sum()) > 0:
+        cat_g = view.groupby("類別")["市值"].sum()
         tot = float(cat_g.sum())
         c1, c2 = st.columns(2)
         with c1:

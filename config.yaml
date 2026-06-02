@@ -58,9 +58,11 @@ indicators:
   atr_period: 14
 
 # --- Fibonacci 策略參數 ---
+# 回測調校（2026-06-02，5y 日線 10 檔）：entry_low 0.5→0.382 後 Sharpe 中位 0.5→0.741、
+# 年化均 0.146→0.176、交易數 138→203（樣本更足）。lookback 維持 60（改 90 與此區間合用反而略降）。
 fibonacci:
   lookback: 60       # 取過去幾根 K 線的波段高低
-  entry_low: 0.5     # 進場「黃金回撤區間」下界（較淺回撤）
+  entry_low: 0.382   # 進場「黃金回撤區間」下界（較淺回撤）
   entry_high: 0.618  # 進場「黃金回撤區間」上界（較深回撤）
   tolerance: 0.01    # 區間邊緣額外緩衝（±1%）
 
@@ -70,10 +72,17 @@ golden_cross:
   long: 200          # 長期均線天數（需至少 long 根資料才會有訊號）
 
 # --- 風控參數 ---
+# ⚠ atr_stop_mult / reward_risk_ratio 目前僅供「顯示建議停損停利」，
+#   回測引擎只依 buy/sell 訊號進出（不掛停損單），故調這兩個不影響回測績效。
+# 回測調校（2026-06-02，5y 日線 10 檔）：ema_macd_rsi 的 RSI 進場帶由 50-70 放寬為 45-75，
+#   Sharpe 中位 0.601→0.657、年化均 0.096→0.11、勝率 0.403→0.419（更激進可試 40-80：Sharpe 0.707）。
+#   另測「close>SMA200 趨勢濾網」反而變差（Sharpe 0.601→0.447），故不採用。
 risk:
-  atr_stop_mult: 1.0       # 停損 = 進場價 - k*ATR
-  reward_risk_ratio: 2.0   # 停利 = 停損距離 * 此倍數
+  atr_stop_mult: 1.0       # 停損 = 進場價 - k*ATR（僅顯示用）
+  reward_risk_ratio: 2.0   # 停利 = 停損距離 * 此倍數（僅顯示用）
   risk_per_trade_pct: 1.0  # 單筆風險佔資金 %（1~2 建議）
+  rsi_entry_low: 45        # ema_macd_rsi 進場 RSI 下界（中性偏多）
+  rsi_entry_high: 75       # ema_macd_rsi 進場 RSI 上界（未過熱）
 
 # --- 回測設定 ---
 backtest:

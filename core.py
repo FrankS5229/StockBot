@@ -168,13 +168,13 @@ def remove_holding(symbol: str, market: str) -> None:
 def get_portfolio_holdings() -> list[dict]:
     """取得庫存清單。
 
-    一旦使用者透過介面存過庫存（`user_portfolio.json` 非空），即**以它為準**——
-    介面可完整新增/修改/刪除（這也根治了「portfolio.yaml 來源的持股按移除無效」）。
-    若使用者還沒存過（user json 為空），則回退到 `portfolio.yaml` 當初始種子。
+    一旦使用者透過介面存過庫存（`user_portfolio.json` **檔案存在**），即**以它為準**——
+    介面可完整新增/修改/刪除，連「全部刪光存成空清單」也成立（不會被 yaml 種子復活）。
+    這根治了「portfolio.yaml 來源持股刪不掉 / 刪改後市值損益沒更新」。
+    若使用者還沒存過（檔案不存在），則回退到 `portfolio.yaml` 當初始種子。
     """
-    user = load_user_portfolio()
-    if user:
-        return user
+    if USER_PORTFOLIO.exists():
+        return load_user_portfolio()
     yaml_pf = load_portfolio()
     return (yaml_pf or {}).get("holdings", []) if yaml_pf else []
 

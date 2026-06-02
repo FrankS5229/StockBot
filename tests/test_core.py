@@ -66,22 +66,33 @@ def test_portfolio_crud(tmp_path=None):
             tmpf.unlink()
 
 
-def test_get_portfolio_holdings_merge():
-    """user_portfolio 應覆蓋 portfolio.yaml 的同鍵。"""
+def test_get_portfolio_holdings_user_priority():
+    """存過 user json 後以它為準；連「全刪存空」也不會被 portfolio.yaml 種子復活。"""
     import tempfile
     from pathlib import Path
 
     original = core.USER_PORTFOLIO
-    tmpf = Path(tempfile.gettempdir()) / "sb_test_merge.json"
+    tmpf = Path(tempfile.gettempdir()) / "sb_test_holdings.json"
     core.USER_PORTFOLIO = tmpf
     try:
+        # 1) 沒存過（檔案不存在）→ 回退 portfolio.yaml 種子
+        if tmpf.exists():
+            tmpf.unlink()
+        seed = core.get_portfolio_holdings()  # 可能為空（若無 yaml）或 yaml 內容
+
+        # 2) 存過 → 以 user json 為準
         core.save_user_portfolio([
             {"symbol": "NVDA", "market": "US", "shares": 5, "cost": 200, "currency": "USD"},
         ])
-        merged = core.get_portfolio_holdings()
-        nvda = [h for h in merged if h["symbol"].upper() == "NVDA"]
-        assert nvda and float(nvda[0]["shares"]) == 5
-        print("portfolio merge OK")
+        held = core.get_portfolio_holdings()
+        assert [h["symbol"].upper() for h in held] == ["NVDA"]
+        assert float(held[0]["shares"]) == 5
+
+        # 3) 全部刪光存成空清單 → 檔案存在但為空 → 應回空，不復活 yaml
+        core.save_user_portfolio([])
+        assert core.get_portfolio_holdings() == [], "空檔不該被 portfolio.yaml 種子復活"
+        print("portfolio user-priority + 全刪不復活 OK")
+        _ = seed  # 種子分支已執行（值依環境而定，不強制斷言）
     finally:
         core.USER_PORTFOLIO = original
         if tmpf.exists():
@@ -91,5 +102,5 @@ def test_get_portfolio_holdings_merge():
 if __name__ == "__main__":
     test_strategy_registry()
     test_portfolio_crud()
-    test_get_portfolio_holdings_merge()
+    test_get_portfolio_holdings_user_priority()
     print("test_core 全部通過")

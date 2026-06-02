@@ -142,6 +142,18 @@ pandas 自動對齊 → OHLC 整欄變 NaN。後果：ema/fib 的「buy 停損�
 
 ---
 
+## B 區收尾：調參 + 投組三項（2026-06-02）
+
+- **B2-調參（數據驅動）**：寫一次性掃參腳本（5y 日線、watchlist 10 檔，跑完即刪）。結論套進 `config.yaml`：
+  - ema_macd_rsi RSI 進場帶 `50-70 → 45-75`（Sharpe 中位 0.601→0.657、年化均 0.096→0.11、勝率 0.403→0.419；更激進 40-80 可到 Sharpe 0.707）。
+  - fibonacci 進場區間下界 `0.5 → 0.382`（Sharpe 0.5→0.741、年化 0.146→0.176、交易 138→203，樣本更足）。lookback 維持 60（改 90 與此區間合用反而略降）。
+  - **重要發現**：①「close>SMA200 趨勢濾網」反而拉低績效（Sharpe 0.601→0.447）→ 不採用；②EMA 週期 5/20 與 20/50 差距很小 → 維持短線 5/20；③`atr_stop_mult`/`reward_risk_ratio` **不入回測**（`run_backtest` 只依 buy/sell 訊號、不掛停損單），僅供顯示建議——調它們對回測無感。config 已加註。
+- **投組刪改即時連動（修 bug）**：根因＝「存空清單 `[]` 被當 falsy → `get_portfolio_holdings` 退回 `portfolio.yaml` 種子 → 全刪復活、刪改後市值損益沒變」。改以 **`USER_PORTFOLIO.exists()`** 判斷使用者是否存過（檔案存在即以它為準，空清單也算數）。測試由 `*_merge` 改名 `*_user_priority` 並補「全刪不復活」斷言。
+- **投組列排序**：`st.data_editor` 加「排序」數字欄，存檔依值穩定重排並持久化到 json（顯示/圖表都依此序）。Streamlit data_editor 無原生滑鼠拖曳，數字排序為等效解；要真拖曳需另加 `streamlit-sortables` 元件（待辦）。
+- **投組類別 filter**：估值明細上方加「類別篩選」多選（預設全選），連動估值表 / 總市值損益 metrics / 類別小計 + 圓餅。
+
+---
+
 ## 待辦 / 下一步
 
 👉 **未完成事項與下一步統一列於 [`STATUS.md`](../STATUS.md)**（開新工作階段先看那份）。

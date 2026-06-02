@@ -108,6 +108,7 @@ user_watchlist.json ─┤(合併)
 **停損/停利**（buy 當根 ATR 估算）：
 - 停損 = close − `atr_stop_mult` × ATR（預設 1.0）
 - 停利 = close + `atr_stop_mult` × ATR × `reward_risk_ratio`（預設 2.0）
+- ⚠ 這兩個值**僅供顯示建議**：`run_backtest` 只依 buy/sell 訊號於次根開盤進出、**不掛停損/停利單**，故調 `atr_stop_mult`/`reward_risk_ratio` 不影響回測績效（要納入需在 runner 增加觸價出場邏輯）。
 
 **可解釋性**：`generate()` 同時產生 `reason` 欄（白話列出觸發條件）。`Signal.as_text()` 組成通知/顯示文字。
 
@@ -192,4 +193,5 @@ scanner/dashboard 透過介面呼叫，無需改動。
 - 手畫線（Plotly 工具列）重整後不保存。
 - **「買進持有對照」= 整段回測期間抱滿**（第一根買、最後一根賣），期間長度由 `data.period` 決定；**儀表板側邊欄已可直接調整「回測長度」與「K線週期」**（2026-06-01），改 yaml 為備用方式。
 - **年化基準依週期+市場套用**：儀表板 `_periods_per_year(interval, market)`（日 252／週 52／月 12；盤中：台股 30分9/60分5 根·美股 13/7，乘交易日）推算 `periods_per_year` 傳給 `run_backtest`，取代先前寫死 252。⚠ 盤中年化/Sharpe 本質噪音大（短窗放大），僅供參考。`runner.py` 預設仍為 252。
-- **Fibonacci 進場已由「0.618±2% 單線」放寬為「0.5–0.618 黃金回撤區間」**（2026-06-01）；區間上下界與緩衝由 `config.yaml` 的 `entry_low`/`entry_high`/`tolerance` 控制。實測買點數明顯增加（NVDA 11→19、QQQ 0→4）。回測期間仍建議拉長到 3–5 年（透過儀表板期間選單或改 `data.period`）以取得更足樣本。
+- **Fibonacci 進場區間演進**：0.618±2% 單線 →（2026-06-01）0.5–0.618 →（2026-06-02 掃參）**0.382–0.618**；下界放寬到 0.382（較淺回撤）後 5y/10 檔 Sharpe 中位 0.5→0.741、年化 0.146→0.176、交易 138→203。區間與緩衝由 `config.yaml` 的 `entry_low`/`entry_high`/`tolerance` 控制。回測期間建議 3–5 年以取得更足樣本。
+- **ema_macd_rsi RSI 進場帶**：50–70 →（2026-06-02 掃參）**45–75**（`risk.rsi_entry_low`/`rsi_entry_high`），Sharpe 中位 0.601→0.657、年化 0.096→0.11。另測「close>SMA200 趨勢濾網」反而變差（Sharpe→0.447）故未採用。
