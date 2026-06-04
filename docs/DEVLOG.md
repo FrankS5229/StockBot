@@ -11,12 +11,13 @@
 |------|------|------|
 | 規劃與定位 | ✅ | 通用選股工具，不綁個人財務；功能=儀表板+回測+(延後)通知；不自動下單 |
 | 資料層 | ✅ | `data/fetchers.py`：美股 yfinance、台股 FinMind→yfinance fallback、parquet 快取 |
-| 指標層 | ✅ | `indicators/ta.py`：純 pandas 自實作 EMA/MACD/RSI/布林/ATR/VWAP/OBV |
+| 指標層 | ✅ | `indicators/ta.py`：純 pandas 自實作 EMA/MACD/RSI/布林/ATR/VWAP（2026-06-05 移除未使用的 OBV） |
+| 目標價引擎 | ✅ | `targets.py`：前瞻式價格情境＝技術價位（Pivot/Fib 擴展/量度移動/通道）＋ GBM 統計投影，輸出區間＋達成機率（2026-06-05） |
 | 策略層 | ✅ | `strategy/`：可解釋訊號（每個訊號附白話理由）+ ATR 停損停利 |
 | 回測層 | ✅ | `backtest/runner.py`：next-bar 執行、含手續費/滑點、防 look-ahead |
 | 測試 | ✅ | `tests/`：離線（合成資料）+ 連網，`run_all` 一鍵 |
 | 通知 | ⏸ | `notify/base.py` 介面 + ConsoleNotifier；管道未定（已排除 Telegram） |
-| 儀表板 | ✅ | `dashboard/app.py`：四面板，已驗證可啟動（HEALTH 200） |
+| 儀表板 | ✅ | `dashboard/app.py`：六面板（K線/訊號/回測/目標價/投組/策略說明），AppTest 端到端無例外 |
 | 一鍵啟動 | ✅ | `啟動儀表板.bat`：雙擊即開網頁 |
 | 介面加標的 | ✅ | 左側欄「➕ 新增標的」，存 `user_watchlist.json`，免改 yaml |
 | 介面加庫存 | ✅ | 投資組合 tab 可新增/移除庫存，存 `user_portfolio.json`，即時報價算損益 |
@@ -26,6 +27,25 @@
 | 回測長度/週期選單 | ✅ | 側邊欄可選回測長度(6mo~max)與 K線週期(日/週/月線)；年化基準依週期套用，修掉寫死 252（2026-06-01） |
 | 震盪市策略 | ✅ | `strategy/bollinger.py`：布林通道均值回歸（站回下軌買、回中軌停利/破下軌停損），補順勢策略外的缺口（2026-06-01） |
 | 儀表板 UI 修正 | ✅ | K線子標題與頂部圖例/工具列分離；投組「配置圓餅」移到表格下方、移除庫存改置最底（2026-06-01） |
+
+---
+
+## 2026-06-05：四項計畫完成（UI 融合 / review 修補 / 常駐訊號狀態 / 目標價引擎）
+
+> 計畫檔：`polished-coalescing-unicorn`。經整體 review 後一次規劃、依序實作，**已全部完成並通過 QA/QT**
+> （`run_all` 離線＋連網 ALL_TESTS_PASSED；Streamlit `AppTest` 跑整個 app.py 無例外 SMOKE_OK）。
+> 同時新增三條開發約定（見 `STATUS.md`）：計畫經確認須寫入 `.md` 留痕、實作完必做 QA/QT、開發結束回頭更新 `.md`。
+
+- **Step1 低風險修補**：`ta.py` 無效 f-string、移除 `obv` 死碼、FinMind 登入失敗改記警告、Sharpe 文字校正為「含空手期間的整體資金 Sharpe」。
+- **Step2 去全域 cfg 耦合**：`analyze_symbol` 加顯式 `strategy/interval/period` 覆寫，`_analyze` 變純函式（向後相容）。
+- **Step3 目標價引擎（核心）**：新增 `targets.py`，**前瞻式**價格情境、與策略 buy/sell 解耦，分短/長線：
+  - 技術價位法：Pivot Points（R1-R3/S1-S3）、Fibonacci 擴展（1.272/1.618/2.618）、量度移動（前波幅 70/100/120% → 保守/基準/樂觀）、Bollinger/Donchian 通道。
+  - 統計投影法：對數報酬估 μ/σ，GBM 給中位/期望價與 70/90% 信賴區間 `S0·exp((μ−0.5σ²)H ± z·σ√H)`；以 `P(S_H≥T)=Φ((ln(S0/T)+(μ−0.5σ²)H)/(σ√H))` 替每條技術目標價算**達成機率** → 輸出「區間＋機率」。短窗 μ 雜訊大，長線預設零漂移純波動錐。
+  - UI：dashboard「🎯 目標價」分頁。**一句話白話結論恆在最上方** + 三檔目標 + 風險區間；**簡易/進階**切換（進階才展開投影錐與完整技術目標表）。`plain_summary()` 產生結論句。
+- **Step4 UI**：手畫控制列收進圖角 `st.popover`（streamlit≥1.32）；K 線上方常駐三態訊號徽章（亮=作用中/暗=未作用）。
+- **Step5 收尾**：回測接上 IS/OOS 樣本外對照、`panel_signals` 改 `st.fragment`、新增防 look-ahead 回歸測試。
+
+研究來源（目標價運算機制）：AAII、Chart Guys（Fib 擴展）、Morpher/AvaTrade（Pivot）、Warrior Trading/NetPicks（量度移動 70-120%）、GBM/Monte Carlo 投影文獻。
 
 ---
 
@@ -159,6 +179,34 @@ pandas 自動對齊 → OHLC 整欄變 NaN。後果：ema/fib 的「buy 停損�
 - **問題**：美股以 USD、台股以 TWD 計價，但總市值/損益與**類別圓餅直接把兩種幣別相加**，比例失真（使用者回報「圓餅上美金台幣計價一樣」）。
 - **修法**：新增 `_usdtwd_rate()`（Yahoo `TWD=X`，快取 1 小時）；估值以 **TWD 為基準**換算後才加總——美股市值 × 匯率、台股不變。總市值/總損益/類別小計/圓餅全部改用 `市值TWD`；估值表同時保留「市值(原幣)」與「市值TWD」兩欄，現價/成本維持原幣。
 - **退化保護**：匯率抓不到時 `fx_ok=False`，退回原幣混算並顯示警告（不致 crash）。實測匯率 ~31.4 TWD/USD。
+
+---
+
+## v1 收尾 + 待辦轉 v2（2026-06-03）
+
+- **v1（規則型）正式收尾**：A/B 區可執行項全數完成（投組統一編輯、刪改連動、排序、類別 filter、跨幣別換算、盤中 30/60 分線、依回測調參、記住標的、UI 目視驗證）。三個 commit 已推上 `origin/main`。
+- **剩餘待辦改列為 v2**：訊號通知（Discord Webhook）、進階即時資料源（TWSE MIS / Shioaji / Alpaca / Finnhub）、進階看盤（lightweight-charts + WebSocket、手畫線保存）、v2 ML 策略（XGBoost/RandomForest，時間序列驗證）。理由：這些都屬「新增能力 / 新外部依賴」，非 v1 範圍內的修補，集中到 v2 規劃較清楚。詳見 [`STATUS.md`](../STATUS.md) 的「v2 待辦」。
+- 本輪為規劃/文件整理，無程式碼變更。
+
+---
+
+## v2 UI 改版（2026-06-03）
+
+v2 第一批 UI 改進，全在 `dashboard/app.py` + `core.py`，未動 bar 管線/回測/look-ahead。
+
+- **當前訊號涵蓋投組**：新增 `_signal_universe()` = 觀察清單 ∪ `get_portfolio_holdings()`，以 (symbol, market) 去重；**只**套用到「當前訊號」tab（側邊欄選單不變）。庫存中但不在觀察清單的標的也會出現。
+- **當前訊號依類別分子 tab**：`panel_signals()` 改成 `st.tabs(["全部", …類別])`，不再只分台股/美股。類別來源：抽出共用 `_category_of(item)`（觀察項與庫存共用，沿用原 `_holding_category` 邏輯）；觀察項可自訂類別——`core.add_symbol()` 多收選填 `category`、側邊欄「新增標的」表單加「類別」欄；兩邊都有的標的若觀察項沒填類別則用庫存類別補，最後 fallback 市場（台股/美股）。
+- **K線手畫工具**：`panel_chart()` 加 `st.color_picker`（設 `fig.layout.newshape.line.color`，只影響之後新畫的線——Plotly 限制）＋「🧹 清除手畫線」按鈕（改 `draw_nonce` → `plotly_chart` 的 `key` 重新掛載 → client 端手畫線清空）。保留 modebar 橡皮擦（單條刪除）。
+- **投組估值表多重篩選**：`panel_portfolio()` 把單一類別篩選擴成 **市場 / 類別 / 代號 / 關鍵字** 四項（放 `🔍 篩選` expander），累積套用到 `view`；下游總計/估值表/類別小計/圓餅已全部吃 `view`，自動連動，空集合由既有 guard 處理。
+- **測試**：`tests/test_core.py` 加 `test_add_symbol_category`（帶/不帶 category、重複代號），併入 `run_all`；離線測試全綠。
+
+---
+
+## macOS 一鍵啟動（2026-06-03）
+
+- 新增 `啟動儀表板.command`（macOS / Linux），對應 `啟動儀表板.bat` 的流程：檢查 Python 3.10+ → 首次建 `.venv` → `requirements.txt` 變動才重裝（比對 `.venv/requirements.lock`）→ 啟動 `streamlit`。差別只在 venv 路徑 `.venv/bin/`（非 `Scripts\`）與 shell 寫法；Finder 右鍵「打開」即可雙擊執行。
+- 新增 `.gitattributes`：`*.command` / `*.sh` 強制 `eol=lf`，避免 Windows 上被轉成 CRLF 造成 macOS 執行 `bash\r` 報錯；該檔以 `100755`（可執行）入庫。
+- README 第一/三節補上 macOS 安裝與啟動（一鍵 + 手動 `python3 -m venv` 路徑）。
 
 ---
 

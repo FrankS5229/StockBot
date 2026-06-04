@@ -3,12 +3,13 @@
 啟動：
     .venv\\Scripts\\streamlit run dashboard/app.py
 
-五個面板：
-  1. K線 + 指標疊圖（含進出場箭頭、停損/停利線）
+六個面板：
+  1. K線 + 指標疊圖（含進出場箭頭、停損/停利線、常駐三態訊號徽章、手畫工具 popover）
   2. 當前訊號狀態（白話理由）
-  3. 回測績效（指標附說明，含買進持有對照）
-  4. 投資組合概覽（讀 portfolio.yaml，通用）
-  5. 策略說明（動態列出各策略 DESCRIPTION）
+  3. 回測績效（指標附說明，含買進持有對照、樣本外 IS/OOS 對照）
+  4. 目標價（前瞻情境：技術價位＋GBM 統計投影，輸出區間＋達成機率）
+  5. 投資組合概覽（讀 portfolio.yaml，通用）
+  6. 策略說明（動態列出各策略 DESCRIPTION）
 
 側邊欄可全域切換：標的、策略、回測長度（period）、K線週期（interval）。
 """
@@ -22,11 +23,15 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from dataclasses import replace
+
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+import targets
 from core import (
     add_symbol,
     analyze_symbol,
@@ -40,7 +45,7 @@ from core import (
     STRATEGY_REGISTRY,
 )
 from data.fetchers import get_ohlcv
-from backtest.runner import METRIC_GLOSSARY, run_backtest
+from backtest.runner import METRIC_GLOSSARY, run_backtest, split_in_out
 
 st.set_page_config(page_title="StockBot 看盤儀表板", layout="wide")
 cfg = load_config()
@@ -74,21 +79,92 @@ def _periods_per_year(interval: str, market: str) -> int:
 def _analyze(symbol: str, market: str, strategy_name: str, interval: str, period: str):
     """抓資料 + 指標 + 訊號（快取 1 小時）。
 
-    strategy_name / interval / period 納入 cache key，切換策略或回測長度/週期時才會重算
-    （這些值本身不使用，實際靠全域 cfg 生效；列入簽章僅為了讓快取正確失效）。
+    strategy_name / interval / period 顯式傳入 analyze_symbol，同時作為 cache key；
+    切換策略或回測長度/週期時自然失效重算，不再依賴就地修改全域 cfg 的副作用。
     """
-    return analyze_symbol(symbol, market, cfg)
+    return analyze_symbol(
+        symbol, market, cfg,
+        strategy=strategy_name, interval=interval, period=period,
+    )
 
 
 def _watch_options() -> dict[str, dict]:
     return {f"{i.get('name', i['symbol'])}（{i['symbol']}）": i for i in cfg.get("watchlist", [])}
 
 
+def _category_of(item: dict) -> str:
+    """標的所屬類別；未自訂則依市場給預設（台股 / 美股）。觀察項與庫存共用。"""
+    c = (item.get("category") or "").strip()
+    if c:
+        return c
+    return "台股" if (item.get("market") or "").upper() == "TW" else "美股"
+
+
+def _signal_universe() -> list[dict]:
+    """當前訊號的觀察宇宙 = 觀察清單 ∪ 投組庫存（以 (symbol, market) 去重）。
+
+    每筆統一為 {symbol, market, name, category}。觀察項沒填類別、但同標的有庫存時，
+    用庫存類別補；都沒有則由市場決定（台股/美股）。
+    """
+    uni: dict[tuple[str, str], dict] = {}
+    for it in cfg.get("watchlist", []):
+        key = (it["symbol"].upper(), it["market"].upper())
+        uni[key] = {
+            "symbol": it["symbol"], "market": it["market"],
+            "name": it.get("name", it["symbol"]),
+            "category": (it.get("category") or "").strip(),
+        }
+    for h in get_portfolio_holdings():
+        sym, mkt = h.get("symbol"), h.get("market")
+        if not sym or not mkt:
+            continue
+        key = (sym.upper(), mkt.upper())
+        if key in uni:
+            if not uni[key]["category"]:          # 觀察項沒填類別 → 用庫存類別補
+                uni[key]["category"] = _category_of(h)
+        else:
+            uni[key] = {"symbol": sym, "market": mkt, "name": sym, "category": _category_of(h)}
+    out = []
+    for v in uni.values():
+        if not v["category"]:                      # 都沒有 → 市場預設
+            v["category"] = _category_of(v)
+        out.append(v)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # 面板 1：K 線 + 指標
 # --------------------------------------------------------------------------- #
+def _signal_badges(active: str):
+    """K 線上方常駐三態訊號徽章：作用中那一態亮、其餘暗（比照 legend 亮/暗）。"""
+    spec = [("buy", "🔼 買進", "#dc2626"), ("sell", "🔽 賣出", "#16a34a"), ("hold", "⏸ 觀望", "#6b7280")]
+    cols = st.columns(3)
+    for col, (key, text, color) in zip(cols, spec):
+        if active == key:  # 亮：飽和底色 + 邊框
+            style = f"background:{color};color:#fff;border:2px solid {color};opacity:1;font-weight:700;"
+        else:              # 暗：透明底、低不透明度
+            style = f"background:transparent;color:{color};border:1px solid {color};opacity:0.35;font-weight:400;"
+        col.markdown(
+            f"<div style='text-align:center;padding:6px 0;border-radius:8px;{style}'>{text}</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def panel_chart(df: pd.DataFrame, label: str):
-    st.subheader(f"📈 {label} K線 + 指標")
+    # 標題列：左標題、右側「手畫工具」popover（顏色 + 清除收進圖角，視覺上幾乎只剩 K 線圖）
+    hdr = st.columns([6, 1])
+    hdr[0].subheader(f"📈 {label} K線 + 指標")
+    with hdr[1].popover("🎨 手畫工具", use_container_width=True):
+        draw_color = st.color_picker("手畫線顏色", "#2563eb", key="draw_color")
+        if st.button("🧹 清除手畫線", help="清掉圖上所有手畫的線/方框"):
+            # 圖每次 run 都重建且不含 shape；改 nonce 讓圖元件重新掛載，確保 client 端手畫線清空
+            st.session_state["draw_nonce"] = st.session_state.get("draw_nonce", 0) + 1
+            st.rerun()
+
+    # 常駐當前訊號狀態（依最後一根 K 棒）：三態恆在，亮=目前訊號、暗=未作用
+    last_signal = str(df["signal"].iloc[-1]) if "signal" in df.columns and len(df) else "hold"
+    _signal_badges(last_signal)
+    st.caption("上方為**目前訊號狀態**（最新一根 K 棒）：亮起者為當前訊號，其餘兩態淡顯但恆在。下圖箭頭為歷史進出場點。")
 
     fig = make_subplots(
         rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
@@ -142,6 +218,8 @@ def panel_chart(df: pd.DataFrame, label: str):
 
     fig.update_layout(
         height=780, xaxis_rangeslider_visible=False, dragmode="drawline",
+        # 手畫新線/方框用所選顏色（Plotly newshape 限制：只影響之後新畫的，不改已畫好的）
+        newshape=dict(line=dict(color=draw_color, width=2)),
         # 圖例獨佔最上方一列，與圖內子標題拉開
         legend=dict(orientation="h", yanchor="bottom", y=1.16, xanchor="left", x=0),
         margin=dict(l=10, r=10, t=130, b=10),
@@ -149,41 +227,68 @@ def panel_chart(df: pd.DataFrame, label: str):
     # 第一個子圖標題往下移，避免和上方圖例/手畫工具列重疊
     if fig.layout.annotations:
         fig.layout.annotations[0].update(yshift=-10)
-    # Plotly 內建手畫工具列
+    # Plotly 內建手畫工具列；key 帶 nonce，按「清除手畫線」後重新掛載即清空
     st.plotly_chart(
         fig, use_container_width=True,
+        key=f"kline_chart_{st.session_state.get('draw_nonce', 0)}",
         config={"modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "eraseshape"]},
     )
-    st.caption("💡 圖表右上工具列可手畫趨勢線/方框；重整頁面後手畫線不會保留（之後可加保存功能）。")
+    st.caption(
+        "💡 上方選顏色後再用右上工具列手畫趨勢線/方框（顏色只套用到之後新畫的）；"
+        "工具列橡皮擦可單條刪除，「🧹 清除手畫線」一次清光。重整頁面手畫線不會保留。"
+    )
 
 
 # --------------------------------------------------------------------------- #
 # 面板 2：當前訊號
 # --------------------------------------------------------------------------- #
+@st.fragment
 def panel_signals():
-    st.subheader("🔔 當前訊號（所有觀察標的）")
-    rows = []
+    head = st.columns([6, 1])
+    head[0].subheader("🔔 當前訊號（觀察清單 ＋ 投組庫存）")
+    # 局部刷新：只重算本面板（其餘分頁/側欄不重跑），避免每次互動都掃整個觀察宇宙
+    if head[1].button("🔄 重新整理", key="refresh_signals", help="只重算當前訊號面板"):
+        st.rerun(scope="fragment")
+    universe = _signal_universe()
+    if not universe:
+        st.info("尚無觀察標的。可在左側欄「➕ 新增標的」，或於「投資組合」加入庫存。")
+        return
+
     active = cfg["strategy"]["active"]
     d = cfg["data"]
-    for label, item in _watch_options().items():
+    rows = []
+    for it in universe:
+        label = f"{it['name']}（{it['symbol']}）"
         try:
-            df = _analyze(item["symbol"], item["market"], active, d["interval"], d["period"])
+            df = _analyze(it["symbol"], it["market"], active, d["interval"], d["period"])
         except Exception as e:
-            rows.append({"標的": label, "訊號": "錯誤", "理由": str(e)})
+            rows.append({"類別": it["category"], "標的": label, "訊號": "錯誤", "理由": str(e)})
             continue
         if df.empty:
-            rows.append({"標的": label, "訊號": "無資料", "理由": ""})
+            rows.append({"類別": it["category"], "標的": label, "訊號": "無資料", "理由": ""})
             continue
         last = df.iloc[-1]
         icon = {"buy": "🔼 買進", "sell": "🔽 賣出", "hold": "⏸ 觀望"}.get(last["signal"], last["signal"])
         rows.append({
+            "類別": it["category"],
             "標的": label,
             "日期": str(df.index[-1].date()),
             "收盤": round(float(last["close"]), 2),
             "訊號": icon,
             "理由": last["reason"] or "（條件未全部滿足，維持觀望）",
         })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    all_df = pd.DataFrame(rows)
+    cats = sorted(all_df["類別"].unique().tolist())
+    show_cols = [c for c in ["日期", "收盤", "訊號", "理由"] if c in all_df.columns]
+    # 子 tab 依類別分組；「全部」涵蓋所有標的（含類別欄）
+    tabs = st.tabs([f"全部（{len(all_df)}）"] + [f"{c}（{int((all_df['類別'] == c).sum())}）" for c in cats])
+    with tabs[0]:
+        st.dataframe(all_df[["類別", "標的", *show_cols]], use_container_width=True, hide_index=True)
+    for tab, c in zip(tabs[1:], cats):
+        with tab:
+            sub = all_df[all_df["類別"] == c]
+            st.dataframe(sub[["標的", *show_cols]], use_container_width=True, hide_index=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -229,6 +334,37 @@ def panel_backtest(df: pd.DataFrame, item: dict, label: str):
             t["return"] = (t["return"] * 100).round(2).astype(str) + "%"
             st.dataframe(t, use_container_width=True, hide_index=True)
 
+    # ---- 樣本內 / 樣本外（IS/OOS）對照 ----
+    split = bt.get("out_of_sample_split", 0.8)
+    if st.checkbox(
+        f"顯示樣本外（OOS）對照（前 {split:.0%} 訓練 / 後 {1 - split:.0%} 驗證）",
+        help="把資料時間序切兩段：前段樣本內(IS)、後段樣本外(OOS)。OOS 表現接近 IS 才代表策略較穩、非過度配適。",
+    ):
+        is_df, oos_df = split_in_out(df, split)
+        if len(oos_df) < 10:
+            st.info("資料太短，切不出有意義的樣本外段，請拉長回測長度。")
+        else:
+            r_is = run_backtest(is_df, commission=comm, slippage=0.0005, periods_per_year=ppy)
+            r_oos = run_backtest(oos_df, commission=comm, slippage=0.0005, periods_per_year=ppy)
+
+            def _col(r):
+                d = r.summary()
+                return {
+                    "總報酬": f"{d['total_return']:+.1%}",
+                    "年化": f"{d['annual_return']:+.1%}",
+                    "Sharpe": f"{d['sharpe']:.2f}",
+                    "最大回撤": f"{d['max_drawdown']:.1%}",
+                    "勝率": f"{d['win_rate']:.0%}",
+                    "交易數": d["num_trades"],
+                }
+
+            comp = pd.DataFrame(
+                {f"樣本內 IS（{len(is_df)} 根）": _col(r_is),
+                 f"樣本外 OOS（{len(oos_df)} 根）": _col(r_oos)}
+            )
+            st.dataframe(comp, use_container_width=True)
+            st.caption("⚠ OOS 遠差於 IS＝可能過度配適（參數只擬合了歷史）；兩者接近才較可信。")
+
 
 # --------------------------------------------------------------------------- #
 # 面板 4：投資組合
@@ -253,14 +389,6 @@ def _usdtwd_rate() -> float:
         return float("nan")
 
 
-def _holding_category(h: dict) -> str:
-    """庫存的子類別；未自訂則依市場給預設（台股 / 美股）。"""
-    c = (h.get("category") or "").strip()
-    if c:
-        return c
-    return "台股" if (h.get("market") or "").upper() == "TW" else "美股"
-
-
 def panel_portfolio():
     st.subheader("💼 投資組合概覽")
 
@@ -280,7 +408,7 @@ def panel_portfolio():
                     "排序": i + 1,
                     "代號": h.get("symbol", ""),
                     "市場": (h.get("market") or "US").upper(),
-                    "類別": _holding_category(h),
+                    "類別": _category_of(h),
                     "股數": float(h.get("shares", 0) or 0),
                     "成本": float(h.get("cost", 0) or 0),
                     "幣別": (h.get("currency") or "").upper(),
@@ -354,7 +482,7 @@ def panel_portfolio():
         mv_twd = mv * fx
         cost_base_twd = cost * shares * fx
         rows.append({
-            "類別": _holding_category(h),
+            "類別": _category_of(h),
             "標的": h["symbol"], "市場": h["market"], "幣別": cur,
             "股數": shares, "成本": cost, "現價": round(px, 2),
             "市值(原幣)": round(mv, 0), "市值TWD": round(mv_twd, 0),
@@ -365,10 +493,30 @@ def panel_portfolio():
         })
     val_df = pd.DataFrame(rows)
 
-    # ---- 類別篩選（多選；預設全選）----
-    cats = sorted(val_df["類別"].unique().tolist())
-    picked = st.multiselect("類別篩選", cats, default=cats, key="cat_filter")
-    view = val_df[val_df["類別"].isin(picked)] if picked else val_df.iloc[0:0]
+    # ---- 篩選（市場 / 類別 / 代號 / 關鍵字；累積套用，下游總計/圓餅連動）----
+    with st.expander("🔍 篩選", expanded=False):
+        f = st.columns(3)
+        mkts = sorted(val_df["市場"].unique().tolist())
+        picked_mkt = f[0].multiselect("市場", mkts, default=mkts, key="mkt_filter")
+        cats = sorted(val_df["類別"].unique().tolist())
+        picked_cat = f[1].multiselect("類別", cats, default=cats, key="cat_filter")
+        syms = sorted(val_df["標的"].unique().tolist())
+        picked_sym = f[2].multiselect("代號（空＝全部）", syms, default=[], key="sym_filter")
+        kw = st.text_input("關鍵字搜尋（比對 標的 / 類別 / 市場）", key="kw_filter").strip()
+
+    view = val_df
+    view = view[view["市場"].isin(picked_mkt)] if picked_mkt else view.iloc[0:0]
+    view = view[view["類別"].isin(picked_cat)] if picked_cat else view.iloc[0:0]
+    if picked_sym:                       # 代號空＝不過濾（看全部）
+        view = view[view["標的"].isin(picked_sym)]
+    if kw:
+        k = kw.lower()
+        mask = (
+            view["標的"].astype(str).str.lower().str.contains(k)
+            | view["類別"].astype(str).str.lower().str.contains(k)
+            | view["市場"].astype(str).str.lower().str.contains(k)
+        )
+        view = view[mask]
 
     # 總計（TWD）依篩選後連動；市值取非 NaN，成本基礎同步對齊
     ok = view["市值TWD"].notna()
@@ -440,6 +588,113 @@ def panel_strategy_info():
 
 
 # --------------------------------------------------------------------------- #
+# 面板 6：目標價（前瞻情境）
+# --------------------------------------------------------------------------- #
+def panel_targets(df: pd.DataFrame, item: dict, label: str):
+    st.subheader(f"🎯 {label} 目標價（前瞻情境）")
+    st.caption(
+        "與買賣訊號不同：訊號是 K 線走完後的**事後**標註；這裡是**從當下往前看**估未來價位。"
+        "展望以目前 K 線週期的「根數」計：短線＝未來 10 根、長線＝未來 120 根。"
+    )
+
+    cset = st.columns([1.2, 1, 2])
+    horizon = cset[0].radio("展望", ["短線", "長線"], horizontal=True, key="target_horizon")
+    mode = cset[1].radio("顯示", ["簡易", "進階"], horizontal=True, key="target_mode",
+                         help="簡易＝三檔目標＋一句結論；進階＝再加投影圖與完整技術目標表（含機率）。")
+    base_spec = targets.SHORT_SPEC if horizon == "短線" else targets.LONG_SPEC
+    advanced = mode == "進階"
+    zero = base_spec.zero_drift
+    if advanced:
+        zero = cset[2].checkbox(
+            "零漂移（μ=0，純波動錐，較保守）", value=base_spec.zero_drift,
+            help="短窗估的漂移雜訊大；長線預設開啟。關閉＝用歷史平均報酬外推（過去 ≠ 未來，請謹慎）。",
+        )
+    spec = replace(base_spec, zero_drift=zero)
+    rep = targets.build_report(df, item["symbol"], spec)
+    if rep is None:
+        st.warning("資料不足，無法計算目標價。")
+        return
+
+    # 一句話白話結論（兩模式都放最上方，是整頁的重點）
+    st.success(targets.plain_summary(rep))
+
+    def _fmt(v: float) -> str:
+        return f"{v:,.2f}（{v / rep.spot - 1:+.1%}）"
+
+    c = st.columns(4)
+    c[0].metric("現價", f"{rep.spot:,.2f}")
+    c[1].metric("基準（統計中位）", _fmt(rep.base), help="GBM 中位投影價，五五波的中間參考。")
+    c[2].metric("保守上檔（第一目標）", _fmt(rep.conservative), help="最接近現價的上檔技術關卡，當第一停利目標。")
+    c[3].metric("樂觀上檔", _fmt(rep.optimistic), help="最遠的上檔目標（含統計 90% 上界），順勢時的想像空間。")
+    st.caption(
+        f"統計投影（GBM，{rep.horizon_bars} 根）：70% 區間 {rep.low70:,.2f}–{rep.high70:,.2f}；"
+        f"90% 區間 {rep.low90:,.2f}–{rep.high90:,.2f}"
+        f"（μ={rep.mu:.4f}／根、σ={rep.sigma:.4f}／根{'，零漂移' if rep.zero_drift else ''}）。"
+    )
+
+    if not advanced:
+        st.caption(
+            "💡 怎麼讀：**保守上檔**＝第一停利目標、**樂觀上檔**＝順勢想像、**基準**＝中性參考、"
+            "**70% 區間**＝近期風險範圍。想看每個價位的「達成機率」與完整關卡，切到上方「進階」。"
+            "　⚠ 目標價是情境推估非預測。"
+        )
+        return
+
+    # ---- 以下為「進階」內容：前瞻投影錐 + 完整技術目標表 ----
+    # ---- 前瞻投影錐（近 60 根歷史 + 未來中位線與 70/90% 帶）----
+    hist = df["close"].iloc[-60:]
+    step = (df.index[-1] - df.index[-2]) if len(df.index) > 1 else pd.Timedelta(days=1)
+    future = [df.index[-1] + step * (i + 1) for i in range(rep.horizon_bars)]
+    ks = np.arange(1, rep.horizon_bars + 1)
+    dr = rep.mu - 0.5 * rep.sigma ** 2
+    sq = rep.sigma * np.sqrt(ks)
+    med = rep.spot * np.exp(dr * ks)
+    hi70, lo70 = rep.spot * np.exp(dr * ks + 1.0364 * sq), rep.spot * np.exp(dr * ks - 1.0364 * sq)
+    hi90, lo90 = rep.spot * np.exp(dr * ks + 1.6449 * sq), rep.spot * np.exp(dr * ks - 1.6449 * sq)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hist.index, y=hist.values, name="歷史收盤", line=dict(color="#3b82f6")))
+    fig.add_trace(go.Scatter(x=future, y=hi90, name="90% 上界", line=dict(width=0), showlegend=False))
+    fig.add_trace(go.Scatter(x=future, y=lo90, name="90% 區間", fill="tonexty",
+                             fillcolor="rgba(59,130,246,0.10)", line=dict(width=0)))
+    fig.add_trace(go.Scatter(x=future, y=hi70, name="70% 上界", line=dict(width=0), showlegend=False))
+    fig.add_trace(go.Scatter(x=future, y=lo70, name="70% 區間", fill="tonexty",
+                             fillcolor="rgba(59,130,246,0.18)", line=dict(width=0)))
+    fig.add_trace(go.Scatter(x=future, y=med, name="中位投影", line=dict(color="#f59e0b", dash="dash")))
+    fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ---- 技術目標表（含 GBM 達成機率）----
+    tl = pd.DataFrame(
+        [
+            {
+                "方法": lv.label,
+                "方向": "上檔" if lv.direction == "up" else "下檔",
+                "目標價": round(lv.price, 2),
+                "距現價": (lv.price / rep.spot - 1) * 100,
+                "達成機率": (lv.prob_reach * 100) if lv.prob_reach is not None else float("nan"),
+            }
+            for lv in rep.levels
+        ]
+    ).sort_values("目標價").reset_index(drop=True)
+    st.markdown("##### 技術目標價（附 GBM 達成機率）")
+    st.dataframe(
+        tl, use_container_width=True, hide_index=True,
+        column_config={
+            "距現價": st.column_config.NumberColumn("距現價", format="%.1f%%"),
+            "達成機率": st.column_config.NumberColumn("達成機率", format="%.0f%%",
+                                                  help="GBM 估：H 根後期末價收在該目標之上(上檔)/之下(下檔)的機率。"),
+        },
+    )
+    st.info(
+        "⚠ 目標價是「情境推估」非預測。技術價位法給明確價位、統計投影法給機率區間；"
+        "GBM 假設對數常態隨機漫步且 μ/σ 固定，真實市場有肥尾與情境轉換。"
+        "長線純技術/統計、無基本面（估值）錨，請搭配其他依據判斷。"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # 版面
 # --------------------------------------------------------------------------- #
 st.title("📊 StockBot 看盤儀表板")
@@ -499,6 +754,7 @@ with st.sidebar:
             new_sym = st.text_input("代號", placeholder="美股如 AAPL；台股如 2454")
             new_mkt = st.radio("市場", ["US", "TW"], horizontal=True)
             new_name = st.text_input("顯示名稱（選填）", placeholder="留空則用代號")
+            new_cat = st.text_input("類別（選填）", placeholder="如 AI / ETF / 半導體；留空依市場")
             submitted = st.form_submit_button("加入")
         if submitted and new_sym.strip():
             sym_u = new_sym.strip().upper()
@@ -509,7 +765,7 @@ with st.sidebar:
                 probe = None
             if probe is None or probe.empty:
                 st.error(f"抓不到 {sym_u}（{new_mkt}）的資料，請確認代號與市場。")
-            elif add_symbol(sym_u, new_mkt, new_name.strip() or None):
+            elif add_symbol(sym_u, new_mkt, new_name.strip() or None, new_cat.strip() or None):
                 st.success(f"已加入 {new_name.strip() or sym_u}（{sym_u}）")
                 st.cache_data.clear()
                 st.rerun()
@@ -541,8 +797,8 @@ if df.empty:
     st.warning("抓不到資料，請換標的或檢查網路。")
     st.stop()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["K線+指標", "當前訊號", "回測績效", "投資組合", "策略說明"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["K線+指標", "當前訊號", "回測績效", "🎯 目標價", "投資組合", "策略說明"]
 )
 with tab1:
     panel_chart(df, label)
@@ -551,6 +807,8 @@ with tab2:
 with tab3:
     panel_backtest(df, item, label)
 with tab4:
-    panel_portfolio()
+    panel_targets(df, item, label)
 with tab5:
+    panel_portfolio()
+with tab6:
     panel_strategy_info()

@@ -180,6 +180,20 @@ def test_bollinger_missing_indicator_raises():
     raise AssertionError("BB 缺指標欄位時應該要報 ValueError")
 
 
+def test_no_lookahead_all_strategies():
+    """防 look-ahead 回歸（專案核心保證）：對每支策略，把資料尾端的「未來」K 棒截掉後重算，
+    先前每一根的 signal 必須完全不變——若用到未來資料，截斷後早期訊號就會改變。"""
+    base = add_indicators(_long_trending(n=500))
+    cut = 400
+    for strat in (EmaMacdRsiStrategy(), FibonacciStrategy(), GoldenCrossStrategy(), BollingerStrategy()):
+        full = strat.generate(base)["signal"].iloc[:cut].tolist()
+        truncated = strat.generate(base.iloc[:cut])["signal"].tolist()
+        assert full == truncated, (
+            f"{strat.name}：截斷未來 K 棒後前 {cut} 根訊號改變 → 疑似 look-ahead"
+        )
+    print("no-lookahead (4 策略) OK")
+
+
 if __name__ == "__main__":
     test_signal_columns_and_values()
     test_buy_has_reason_and_stops()
@@ -193,4 +207,5 @@ if __name__ == "__main__":
     test_bollinger_columns_and_values()
     test_bollinger_buy_stops()
     test_bollinger_missing_indicator_raises()
+    test_no_lookahead_all_strategies()
     print("test_strategy 全部通過")

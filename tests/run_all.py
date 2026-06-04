@@ -11,7 +11,9 @@ import tests.conftest_path  # noqa: F401
 
 def main():
     offline = "--offline" in sys.argv
-    from tests import test_indicators, test_strategy, test_backtest, test_data, test_core
+    from tests import (
+        test_indicators, test_strategy, test_backtest, test_data, test_core, test_targets
+    )
 
     print("=== indicators ===")
     for fn in [
@@ -37,11 +39,21 @@ def main():
     test_strategy.test_bollinger_columns_and_values()
     test_strategy.test_bollinger_buy_stops()
     test_strategy.test_bollinger_missing_indicator_raises()
+    test_strategy.test_no_lookahead_all_strategies()
 
     print("=== core ===")
     test_core.test_strategy_registry()
     test_core.test_portfolio_crud()
     test_core.test_get_portfolio_holdings_user_priority()
+    test_core.test_add_symbol_category()
+
+    print("=== targets ===")
+    test_targets.test_norm_cdf_known_values()
+    test_targets.test_prob_terminal_boundaries()
+    test_targets.test_zero_drift_band_symmetry()
+    test_targets.test_pivot_and_fib_formulas()
+    test_targets.test_prefix_independent_of_future()
+    test_targets.test_plain_summary()
 
     print("=== backtest ===")
     test_backtest.test_next_bar_execution_and_profit()

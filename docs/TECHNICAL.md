@@ -50,16 +50,17 @@ user_watchlist.json ─┤(合併)
 | `strategy/golden_cross.py` | 50/200 均線黃金交叉趨勢策略（長期） | `GoldenCrossStrategy.generate(df)` |
 | `strategy/bollinger.py` | 布林通道均值回歸策略（震盪盤） | `BollingerStrategy.generate(df)` |
 | `backtest/runner.py` | 回測引擎 + 績效 | `run_backtest()`、`split_in_out()`、`METRIC_GLOSSARY` |
+| `targets.py` | 前瞻式目標價（技術價位＋GBM 統計投影，含達成機率） | `build_report()`、`plain_summary()`、`gbm_params()`、`prob_terminal()`、`pivot_points/fib_extensions/measured_move/channel_targets()`、`SHORT_SPEC`/`LONG_SPEC` |
 | `notify/base.py` | 通知介面 | `Notifier`、`ConsoleNotifier`、`get_notifier()` |
-| `core.py` | 共用流程 + watchlist/portfolio 管理 + 策略註冊表 | `load_config`、`analyze_symbol`、`get_strategy`、`add_symbol`/`remove_symbol`、`add_holding`/`remove_holding`/`get_portfolio_holdings`、`STRATEGY_REGISTRY` |
+| `core.py` | 共用流程 + watchlist/portfolio 管理 + 策略註冊表 | `load_config`、`analyze_symbol(…, strategy/interval/period 可覆寫)`、`get_strategy(cfg, active=None)`、`add_symbol`/`remove_symbol`、`add_holding`/`remove_holding`/`get_portfolio_holdings`、`STRATEGY_REGISTRY` |
 | `scanner.py` | CLI 主流程 | `main()` |
-| `dashboard/app.py` | Streamlit 五面板 UI | `panel_chart/signals/backtest/portfolio/strategy_info` |
+| `dashboard/app.py` | Streamlit 六面板 UI | `panel_chart/signals/backtest/targets/portfolio/strategy_info` |
 
 ### 策略註冊表（新增策略只需兩步）
 1. 在 `strategy/` 新增繼承 `Strategy` 的類別，設 `name`、`DESCRIPTION`，實作 `generate()`。
 2. 在 `core.py` 的 `STRATEGY_REGISTRY` 與 `STRATEGY_LABELS` 登記。
 之後側邊欄會自動出現該策略，`config.yaml` 的 `strategy.active` 可設預設。
-儀表板靠把選到的策略名寫入 `cfg["strategy"]["active"]` 達成全域切換（K線/訊號/回測同源）。
+儀表板 `_analyze()` 把選到的 `strategy/interval/period` **顯式傳入** `analyze_symbol`（同時作為 `@st.cache_data` 的 cache key），切換時自然失效重算，不再依賴就地修改全域 `cfg` 的副作用（2026-06-05 重構）。
 
 ### 使用者資料檔（皆 git 忽略）
 - `user_watchlist.json`：介面新增的觀察標的（與 config.yaml 合併去重）。
@@ -124,6 +125,29 @@ user_watchlist.json ─┤(合併)
 - **績效**：總報酬、年化、Sharpe（年化）、最大回撤、勝率、盈虧比、交易次數 + 淨值曲線 + 交易明細。
 - **樣本外**：`split_in_out(df, ratio)` 時間序列切分（前 ratio 為 in-sample）。
 - 指標白話：`METRIC_GLOSSARY` 供儀表板 tooltip。
+- **Sharpe 定義說明（2026-06-05）**：以整段淨值序列計算，含空手期間（資金閒置報酬視為 0），故為「整體資金 Sharpe」，空手越久數字越保守，非僅統計持倉期間。`METRIC_GLOSSARY` tooltip 已載明。
+
+---
+
+## 7b. 目標價引擎（`targets.py`，2026-06-05）
+
+**定位**：前瞻式價格情境，與策略 buy/sell **解耦**（策略是事後標註進出場，這裡是從當下往前看）。
+只用當下與過去 K 棒（無 look-ahead）。分短/長線兩個 horizon（以 K 棒根數計）：`SHORT_SPEC`（10 根）、`LONG_SPEC`（120 根，預設零漂移較保守）。
+
+**技術價位法**（規則明確、可解釋）：
+- **Pivot Points（古典）**：`P=(H+L+C)/3`；`R1=2P−L, R2=P+(H−L), R3=H+2(P−L)`，`S1/S2/S3` 對稱。H/L/C 取最近 `pivot_window` 根聚合。
+- **Fibonacci 擴展**：自近 `fib_lookback` 根的波段低點往上投影，目標 `= swing_low + (swing_high−swing_low)×ext`，`ext∈{1.272,1.618,2.618}`。
+- **量度移動**：以近 `pole_window` 根波段幅度 pole 自現價投影 `spot+pole×{0.7,1.0,1.2}` → 保守/基準/樂觀。
+- **通道**：Bollinger 上軌/中軌（重用既有欄位）＋ Donchian `donchian_n` 日高。
+
+**統計投影法（GBM）**：由對數報酬 `r=ln(close/close.shift(1))` 估每根 `μ=mean(r)`、`σ=std(r)`（`zero_drift=True` 時 μ=0）。
+- 中位 `S0·exp((μ−½σ²)H)`、期望 `S0·exp(μH)`。
+- 信賴區間 `S0·exp((μ−½σ²)H ± z·σ√H)`，70%→z=1.0364、90%→z=1.6449。
+- **達成機率（串接兩法的關鍵）**：對任一目標價 T，`P(S_H≥T)=Φ((ln(S0/T)+(μ−½σ²)H)/(σ√H))`（`down` 方向取補數）。Φ 用 `math.erf` 實作（免 scipy）。
+- 每條技術目標價都會被算出「H 根後期末收在其上/其下」的機率 → UI 輸出「區間＋機率」。
+
+**輸出**：`TargetReport`（統計帶 median/mean/low70/high70/low90/high90 + `levels: list[TargetLevel]` + 彙整保守/基準/樂觀）。`plain_summary(rep)` 把整份濃縮成一句白話結論。
+儀表板第 4 分頁「🎯 目標價」：**一句話結論（恆在最上方）** + 三檔目標（保守/基準/樂觀）+ 風險區間；另有 **簡易/進階** 切換——進階才展開前瞻投影錐＋完整技術目標表（含達成機率）＋誠實註記（GBM 假設、過去≠未來、長線無基本面錨）。**讀法**：保守上檔＝第一停利目標、樂觀＝順勢想像、基準＝中性參考、達成機率＝篩掉不切實際的目標、70% 區間＝近期風險範圍；不是擇一，是分工。
 
 ---
 

@@ -13,7 +13,7 @@ pyarrow>=14.0             # parquet 快取
 # 回測為自寫的 next-bar 向量化引擎（見 backtest/runner.py），不依賴 backtesting.py。
 
 # --- Dashboard ---
-streamlit>=1.30
+streamlit>=1.32         # 需 st.popover（手畫工具收圖角）、st.fragment（訊號面板局部刷新）
 plotly>=5.18
 
 # --- Config / utils ---

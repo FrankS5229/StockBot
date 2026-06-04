@@ -68,8 +68,13 @@ def save_user_watchlist(items: list[dict]) -> None:
     )
 
 
-def add_symbol(symbol: str, market: str, name: str | None = None) -> bool:
-    """新增一個標的到使用者清單。已存在則回 False。"""
+def add_symbol(
+    symbol: str, market: str, name: str | None = None, category: str | None = None
+) -> bool:
+    """新增一個標的到使用者清單。已存在則回 False。
+
+    category（選填）：自訂分組，供「當前訊號」依類別分子 tab；留空則由市場（台股/美股）決定。
+    """
     symbol = symbol.strip().upper()
     market = market.strip().upper()
     if not symbol:
@@ -78,7 +83,11 @@ def add_symbol(symbol: str, market: str, name: str | None = None) -> bool:
     for it in items:
         if it["symbol"].upper() == symbol and it["market"].upper() == market:
             return False  # 已存在
-    items.append({"symbol": symbol, "market": market, "name": name or symbol})
+    item = {"symbol": symbol, "market": market, "name": name or symbol}
+    cat = (category or "").strip()
+    if cat:
+        item["category"] = cat
+    items.append(item)
     save_user_watchlist(items)
     return True
 
@@ -179,10 +188,14 @@ def get_portfolio_holdings() -> list[dict]:
     return (yaml_pf or {}).get("holdings", []) if yaml_pf else []
 
 
-def get_strategy(cfg: dict):
-    """依 cfg['strategy']['active'] 從註冊表取策略；未知或未設則用預設。"""
-    active = (cfg.get("strategy") or {}).get("active", DEFAULT_STRATEGY)
-    cls = STRATEGY_REGISTRY.get(active, STRATEGY_REGISTRY[DEFAULT_STRATEGY])
+def get_strategy(cfg: dict, active: str | None = None):
+    """從註冊表取策略。
+
+    active 給定時以它為準（顯式覆寫）；否則用 cfg['strategy']['active']；
+    未知或未設則退回 DEFAULT_STRATEGY。
+    """
+    name = active or (cfg.get("strategy") or {}).get("active", DEFAULT_STRATEGY)
+    cls = STRATEGY_REGISTRY.get(name, STRATEGY_REGISTRY[DEFAULT_STRATEGY])
     return cls(cfg)
 
 
@@ -191,26 +204,35 @@ def analyze_symbol(
     market: str,
     cfg: dict,
     *,
+    strategy: str | None = None,
+    interval: str | None = None,
+    period: str | None = None,
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """抓單一標的資料並附上指標與訊號欄位。"""
+    """抓單一標的資料並附上指標與訊號欄位。
+
+    strategy / interval / period 為顯式覆寫；留 None 則沿用 cfg（向後相容）。
+    顯式傳入可讓呼叫端（如儀表板快取）不依賴就地修改全域 cfg 的副作用。
+    """
     d = cfg.get("data", {})
     raw = get_ohlcv(
         symbol,
         market,
-        interval=d.get("interval", "1d"),
-        period=d.get("period", "2y"),
+        interval=interval or d.get("interval", "1d"),
+        period=period or d.get("period", "2y"),
         use_cache=use_cache,
     )
     if raw.empty:
         return raw
     df = add_indicators(raw, cfg.get("indicators"))
-    return get_strategy(cfg).generate(df)
+    return get_strategy(cfg, strategy).generate(df)
 
 
-def latest_signal(symbol: str, market: str, cfg: dict, **kw) -> Signal | None:
+def latest_signal(
+    symbol: str, market: str, cfg: dict, *, strategy: str | None = None, **kw
+) -> Signal | None:
     """取單一標的最新訊號快照。"""
-    df = analyze_symbol(symbol, market, cfg, **kw)
+    df = analyze_symbol(symbol, market, cfg, strategy=strategy, **kw)
     if df.empty:
         return None
-    return get_strategy(cfg).latest_signal(df, symbol)
+    return get_strategy(cfg, strategy).latest_signal(df, symbol)

@@ -99,8 +99,36 @@ def test_get_portfolio_holdings_user_priority():
             tmpf.unlink()
 
 
+def test_add_symbol_category():
+    """add_symbol 帶 category 應寫進 watchlist；留空則不帶該鍵。"""
+    import tempfile
+    from pathlib import Path
+
+    original = core.USER_WATCHLIST
+    tmpf = Path(tempfile.gettempdir()) / "sb_test_watchlist.json"
+    if tmpf.exists():
+        tmpf.unlink()
+    core.USER_WATCHLIST = tmpf
+    try:
+        assert core.add_symbol("NVDA", "US", "NVIDIA", "AI") is True
+        items = core.load_user_watchlist()
+        assert len(items) == 1 and items[0]["category"] == "AI"
+        # 留空類別 → 不帶 category 鍵（由市場決定預設）
+        assert core.add_symbol("2330", "TW", "台積電") is True
+        tw = [it for it in core.load_user_watchlist() if it["symbol"] == "2330"][0]
+        assert "category" not in tw
+        # 重複代號 → False
+        assert core.add_symbol("NVDA", "US") is False
+        print("add_symbol category OK")
+    finally:
+        core.USER_WATCHLIST = original
+        if tmpf.exists():
+            tmpf.unlink()
+
+
 if __name__ == "__main__":
     test_strategy_registry()
     test_portfolio_crud()
     test_get_portfolio_holdings_user_priority()
+    test_add_symbol_category()
     print("test_core 全部通過")

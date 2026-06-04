@@ -9,13 +9,18 @@
 
 ## 一、快速開始（一鍵啟動）
 
-**前提**：電腦已裝 Python 3.10 以上（安裝時請勾選 *Add python.exe to PATH*）。
+**前提**：電腦已裝 Python 3.10 以上。
 
-**只要雙擊 `啟動儀表板.bat`** 即可。它會自動：
+- **Windows**：勾選安裝時的 *Add python.exe to PATH*，然後**雙擊 `啟動儀表板.bat`**。
+- **macOS**：先裝 Python（`brew install python`，或 https://www.python.org/downloads/ ），
+  然後在 Finder 對 **`啟動儀表板.command`** 按右鍵 →「打開」（首次需授權一次，之後可直接雙擊）。
+  若顯示權限不足，先在終端機於專案資料夾執行一次：`chmod +x 啟動儀表板.command`。
+
+一鍵腳本會自動：
 1. 檢查 Python；2. 首次自動建立虛擬環境 `.venv`、安裝所需套件（需幾分鐘、要連網）；
 3. 啟動儀表板，瀏覽器自動開啟 http://localhost:8501 。
 
-之後再雙擊會偵測到環境已就緒、**直接開啟**；`requirements.txt` 有更新時會自動重裝。
+之後再開會偵測到環境已就緒、**直接啟動**；`requirements.txt` 有更新時會自動重裝。
 （手動安裝/啟動方式見下方第三節。）
 
 ## 二、設定（都可選）
@@ -28,17 +33,20 @@
 
 ## 三、手動安裝 / 啟動（進階，選用）
 
-不想用一鍵 `.bat`，也可手動操作：
+不想用一鍵腳本，也可手動操作：
 
+**Windows（PowerShell）**
 ```powershell
-# 1. 建立虛擬環境（已建好可略過）
-python -m venv .venv
+python -m venv .venv                                        # 1. 建立虛擬環境（已建好可略過）
+.venv\Scripts\python.exe -m pip install -r requirements.txt # 2. 安裝套件
+.venv\Scripts\streamlit run dashboard/app.py               # 3. 啟動儀表板
+```
 
-# 2. 安裝套件
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-
-# 3. 啟動儀表板
-.venv\Scripts\streamlit run dashboard/app.py
+**macOS / Linux（終端機）**
+```bash
+python3 -m venv .venv                          # 1. 建立虛擬環境（已建好可略過）
+.venv/bin/python -m pip install -r requirements.txt  # 2. 安裝套件
+.venv/bin/streamlit run dashboard/app.py       # 3. 啟動儀表板
 ```
 
 ---

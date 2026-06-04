@@ -61,7 +61,7 @@ def test_atr_positive():
 def test_add_indicators_columns():
     df = _synthetic()
     out = ta.add_indicators(df)
-    for col in ["ema_fast", "ema_slow", "macd_hist", "rsi", "bb_upper", "atr", "vwap", "obv"]:
+    for col in ["ema_fast", "ema_slow", "macd_hist", "rsi", "bb_upper", "atr", "vwap"]:
         assert col in out.columns, f"缺欄位 {col}"
     assert len(out) == len(df)
     print("add_indicators columns OK")

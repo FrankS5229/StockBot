@@ -91,12 +91,6 @@ def vwap(
     return pv / vol
 
 
-def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
-    """能量潮 OBV：漲日累加量、跌日扣量。"""
-    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-    return (direction * volume).fillna(0).cumsum()
-
-
 # --------------------------------------------------------------------------- #
 # 主函式
 # --------------------------------------------------------------------------- #
@@ -117,8 +111,8 @@ def add_indicators(df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
     out = df.copy()
     close, high, low, vol = out["close"], out["high"], out["low"], out["volume"]
 
-    out[f"ema_fast"] = ema(close, c["ema_fast"])
-    out[f"ema_slow"] = ema(close, c["ema_slow"])
+    out["ema_fast"] = ema(close, c["ema_fast"])
+    out["ema_slow"] = ema(close, c["ema_slow"])
 
     m = c["macd"]
     out = out.join(macd(close, m["fast"], m["slow"], m["signal"]))
@@ -130,7 +124,6 @@ def add_indicators(df: pd.DataFrame, cfg: dict | None = None) -> pd.DataFrame:
 
     out["atr"] = atr(high, low, close, c["atr_period"])
     out["vwap"] = vwap(high, low, close, vol, b["length"])
-    out["obv"] = obv(close, vol)
 
     return out
 

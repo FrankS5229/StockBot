@@ -5,7 +5,19 @@
       "Bash(cd /d D:\\\\CODE\\\\StockBot)",
       "Bash(.venv/Scripts/python.exe -c ' *)",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(rm -f test_out_fibtw.txt test_out_fibtw2.txt)"
+      "Bash(rm -f test_out_fibtw.txt test_out_fibtw2.txt)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe -m tests.run_all --offline > test_review_out.txt 2>&1; \"EXIT=$LASTEXITCODE\"; Get-Content test_review_out.txt -Tail 6)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe param_sweep.py > sweep_out.txt 2>&1; \"EXIT=$LASTEXITCODE\"; Get-Content sweep_out.txt)",
+      "PowerShell(.venv\\\\Scripts\\\\python.exe confirm_combo.py > combo_out.txt 2>&1; \"EXIT=$LASTEXITCODE\"; Get-Content combo_out.txt)",
+      "Bash(dir /s /b *.py *.md *.txt)",
+      "Bash(findstr /v /i \"\\\\.git node_modules __pycache__\")",
+      "Bash(git --no-pager diff --stat HEAD)",
+      "Bash(.venv/Scripts/python.exe -m tests.run_all --offline)",
+      "Bash(echo \"OFFLINE_EXIT=$?\")",
+      "Bash(.venv/Scripts/python.exe -m tests._smoke_app)",
+      "Bash(echo \"SMOKE_EXIT=$?\")",
+      "Bash(rm -f tests/_qa.log tests/_smoke.log tests/_smoke_app.py)",
+      "Bash(git add *)"
     ]
   }
 }

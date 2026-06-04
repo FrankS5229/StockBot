@@ -141,8 +141,9 @@ def _fetch_finmind(symbol: str, interval: str, period: str) -> pd.DataFrame | No
     if token:
         try:
             api.login_by_token(api_token=token)
-        except Exception:
-            pass  # token 失效也先試免登入額度
+        except Exception as e:
+            # token 失效也先試免登入額度，但記一行警告方便除錯
+            print(f"⚠ FinMind token 登入失敗（改用免登入額度）：{e}")
 
     start = _period_to_start(period)
     try:
