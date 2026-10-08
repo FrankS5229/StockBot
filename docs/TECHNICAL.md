@@ -66,6 +66,22 @@ user_watchlist.json ─┤(合併)
 - `user_watchlist.json`：介面新增的觀察標的（與 config.yaml 合併去重）。
 - `user_portfolio.json`：介面新增的庫存（與 portfolio.yaml 合併，user 覆蓋同鍵）。
 
+### user-data 儲存後端（可注入）＋ 無狀態模式（2026-10-09）
+
+`core.py` 把 user data 讀寫抽象成一個可替換的 store，預設 `FileStore`（寫上面兩個 JSON，單機行為不變）：
+
+- 介面：`watchlist_load/save`、`portfolio_load/save`、`portfolio_has_user_data()`。
+  後者決定 `get_portfolio_holdings()` 是否退回 `portfolio.yaml` 種子（`FileStore`＝檔案是否存在）。
+- `use_store(store)` 可在執行期覆寫 `_USER_STORE`。`core` 本身**不 import streamlit**，CLI/`scanner.py` 無感。
+
+**無狀態（公開試用）模式**由旗標 `STOCKBOT_STATELESS` 開啟（環境變數優先，其次 `st.secrets`）：
+`dashboard/app.py` 注入 `SessionStore`，user data 改存 `st.session_state` —— 每個瀏覽器分頁各自獨立、
+重整（新 session）即歸零、完全不寫磁碟；`portfolio_has_user_data()` 恆為 `True` → 投組初始**完全空白、不吃 yaml 種子**。
+本機不設旗標即維持 `FileStore`（寫檔記憶）。部署細節見 [`DEPLOY.md`](DEPLOY.md)。
+
+**手機版面**：`?m=1` 或側欄 toggle 設 `MOBILE`；`layout_cols()` 於手機回傳垂直堆疊的 `st.container()`
+取代 `st.columns()`，並下修圖高、精簡投組明細欄位。
+
 ---
 
 ## 4. 資料層細節

@@ -1,7 +1,7 @@
 # STATUS — 從這裡接續
 
 > 開新工作階段先看這份：現在做到哪、下一步做什麼、怎麼跑起來。
-> 最後更新：**2026-06-05**。完整歷史見 [`docs/DEVLOG.md`](docs/DEVLOG.md)。
+> 最後更新：**2026-10-09**。完整歷史見 [`docs/DEVLOG.md`](docs/DEVLOG.md)。
 
 ---
 
@@ -9,6 +9,7 @@
 
 **v1（規則型）已收尾**：4 支策略 + 6 面板 Streamlit 儀表板 + 自寫回測 + 投組跨幣別換算，全部離線/連網測試通過、已推上 GitHub。
 **2026-06-05 完成一輪 review 修補 + 新增「🎯 目標價」前瞻引擎**（技術價位＋GBM 統計投影，輸出區間＋機率）、K 線常駐三態訊號徽章、手畫工具收圖角 popover、回測樣本外(OOS)對照。
+**2026-10-09 完成手機網頁版（無狀態雲端部署）**：`STOCKBOT_STATELESS` 旗標切兩套行為（本機照舊寫檔／雲端走 session、重整歸零、初始空白），可注入 user-data store，手機版面重排，`docs/DEPLOY.md` 部署指南。**匿名部署為最後步驟（Step 7，上線前另談）。**
 下一階段 **v2**：訊號通知、進階即時資料源、進階看盤、ML 策略（見下方「v2 待辦」）。
 
 ## 快速啟動 / 驗證
@@ -66,6 +67,16 @@
 - [x] **QA/QT**：新增 `tests/test_targets.py`（5 測）；`run_all` 離線＋連網皆 ALL_TESTS_PASSED；Streamlit `AppTest` 跑整個 app.py 無例外（SMOKE_OK）。
 
 完整公式與運算機制（Pivot/Fib 擴展/量度移動 70-120%/GBM `S0·exp((μ−0.5σ²)H ± z·σ√H)`、達成機率 `Φ(·)`）見計畫檔與 `docs/TECHNICAL.md`。
+
+### ✅ 已完成計畫（2026-10-09，計畫檔：`soft-bonbon`）手機網頁版（無狀態雲端）
+
+單機版行為完全不變；用 `STOCKBOT_STATELESS` 旗標切雲端無狀態。部署指南見 [`docs/DEPLOY.md`](docs/DEPLOY.md)。
+- [x] **可注入 user-data store**：`core.py` 加 `FileStore`（預設）＋`use_store()`，4 基礎函式與 `get_portfolio_holdings` 改委派；`core` 仍不依賴 streamlit、CLI 無感。
+- [x] **無狀態模式**：`dashboard/app.py` 偵測旗標 → 注入 `SessionStore`（user data 走 `st.session_state`）；每瀏覽器分頁獨立、重整即歸零、不寫磁碟、投組初始空白不吃 yaml 種子；頂部加公開試用提示。
+- [x] **手機重排**：側欄「📱 手機版面」toggle／網址 `?m=1`；`layout_cols()` 把多欄改單欄堆疊、圖高下修、投組明細精簡欄位。
+- [x] **部署設定/文件**：`.streamlit/config.toml`、`docs/DEPLOY.md`（平台比較＋Streamlit Community Cloud 步驟＋Secrets）、`.env.example` 補旗標。
+- [x] **QA/QT**：新增 `tests/test_stateless_store.py`（2 測，登記進 `run_all`）；`run_all --offline` ALL_TESTS_PASSED；兩模式 `AppTest` 皆 SMOKE_OK。
+- [ ] **Step 7（最後步驟、上線前另談）匿名部署**：自訂 subdomain＋公開 repo 放暱稱/中性 org＋commit 用匿名信箱，訪客看不出 owner 是本人。
 
 ### A. UI 改版（4 項）✅ 2026-06-03 完成（詳見 `docs/DEVLOG.md`）
 - [x] **當前訊號涵蓋投組**：`_signal_universe()` = 觀察清單 ∪ 投組庫存（去重）；只在「當前訊號」tab。

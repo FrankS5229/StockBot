@@ -1,5 +1,6 @@
 # Secrets / personal data
 .env
+.streamlit/secrets.toml
 portfolio.yaml
 user_watchlist.json
 user_portfolio.json

@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -40,6 +41,7 @@ from core import (
     load_user_watchlist,
     remove_symbol,
     save_user_portfolio,
+    use_store,
     DEFAULT_STRATEGY,
     STRATEGY_LABELS,
     STRATEGY_REGISTRY,
@@ -48,7 +50,79 @@ from data.fetchers import get_ohlcv
 from backtest.runner import METRIC_GLOSSARY, run_backtest, split_in_out
 
 st.set_page_config(page_title="StockBot 看盤儀表板", layout="wide")
+
+
+# --------------------------------------------------------------------------- #
+# 無狀態（雲端）模式：user data 走 session，不碰磁碟、重整即歸零
+# --------------------------------------------------------------------------- #
+def _truthy(v) -> bool:
+    return v is not None and str(v).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _flag(name: str):
+    """讀旗標：優先環境變數，其次 st.secrets（本機無 secrets.toml 時安全略過）。"""
+    val = os.getenv(name)
+    if val is None:
+        try:
+            val = st.secrets.get(name)
+        except Exception:
+            val = None
+    return val
+
+
+class SessionStore:
+    """無狀態後端：watchlist / portfolio 存 st.session_state。
+
+    每個瀏覽器分頁各自獨立、重整（新 session）即歸零、完全不寫磁碟。
+    portfolio_has_user_data() 恆為 True → 永遠用 session 空清單、不吃 portfolio.yaml 種子
+    （符合雲端「初始完全空白」）。
+    """
+
+    def _get(self, key: str) -> list[dict]:
+        if key not in st.session_state:
+            st.session_state[key] = []
+        return st.session_state[key]
+
+    def watchlist_load(self) -> list[dict]:
+        return list(self._get("_wl"))
+
+    def watchlist_save(self, items: list[dict]) -> None:
+        st.session_state["_wl"] = list(items)
+
+    def portfolio_load(self) -> list[dict]:
+        return list(self._get("_pf"))
+
+    def portfolio_save(self, items: list[dict]) -> None:
+        st.session_state["_pf"] = list(items)
+
+    def portfolio_has_user_data(self) -> bool:
+        return True
+
+
+STATELESS = _truthy(_flag("STOCKBOT_STATELESS"))
+if STATELESS:
+    use_store(SessionStore())  # 需在 load_config() 之前注入（watchlist 於此合併）
+
 cfg = load_config()
+
+
+# --------------------------------------------------------------------------- #
+# 手機版面：窄螢幕改單欄堆疊、縮圖高、投組精簡欄位
+# --------------------------------------------------------------------------- #
+# MOBILE 由側欄 toggle 決定（以 ?m= 記在網址，重整可還原）；於側欄區塊賦值為模組全域。
+MOBILE = False
+
+
+def layout_cols(spec):
+    """手機模式回傳垂直堆疊的 container；桌機回傳 st.columns(spec)。
+
+    spec 同 st.columns：int（等寬欄數）或 list（相對寬度）。回傳皆可用 [i] 取用、
+    支援 .metric/.subheader/.popover 等，故呼叫端無需分流。
+    """
+    if not MOBILE:
+        return st.columns(spec)
+    n = spec if isinstance(spec, int) else len(spec)
+    return [st.container() for _ in range(n)]
 
 # K線週期選項（日/週/月 + 盤中 60/30 分；盤中走 yfinance，延遲約 15 分）
 INTERVAL_OPTIONS = ["1d", "1wk", "1mo", "60m", "30m"]
@@ -138,7 +212,7 @@ def _signal_universe() -> list[dict]:
 def _signal_badges(active: str):
     """K 線上方常駐三態訊號徽章：作用中那一態亮、其餘暗（比照 legend 亮/暗）。"""
     spec = [("buy", "🔼 買進", "#dc2626"), ("sell", "🔽 賣出", "#16a34a"), ("hold", "⏸ 觀望", "#6b7280")]
-    cols = st.columns(3)
+    cols = layout_cols(3)
     for col, (key, text, color) in zip(cols, spec):
         if active == key:  # 亮：飽和底色 + 邊框
             style = f"background:{color};color:#fff;border:2px solid {color};opacity:1;font-weight:700;"
@@ -152,7 +226,7 @@ def _signal_badges(active: str):
 
 def panel_chart(df: pd.DataFrame, label: str):
     # 標題列：左標題、右側「手畫工具」popover（顏色 + 清除收進圖角，視覺上幾乎只剩 K 線圖）
-    hdr = st.columns([6, 1])
+    hdr = layout_cols([6, 1])
     hdr[0].subheader(f"📈 {label} K線 + 指標")
     with hdr[1].popover("🎨 手畫工具", use_container_width=True):
         draw_color = st.color_picker("手畫線顏色", "#2563eb", key="draw_color")
@@ -217,7 +291,7 @@ def panel_chart(df: pd.DataFrame, label: str):
     fig.add_hline(y=30, line=dict(color="green", dash="dash", width=0.5), row=3, col=1)
 
     fig.update_layout(
-        height=780, xaxis_rangeslider_visible=False, dragmode="drawline",
+        height=460 if MOBILE else 780, xaxis_rangeslider_visible=False, dragmode="drawline",
         # 手畫新線/方框用所選顏色（Plotly newshape 限制：只影響之後新畫的，不改已畫好的）
         newshape=dict(line=dict(color=draw_color, width=2)),
         # 圖例獨佔最上方一列，與圖內子標題拉開
@@ -244,7 +318,7 @@ def panel_chart(df: pd.DataFrame, label: str):
 # --------------------------------------------------------------------------- #
 @st.fragment
 def panel_signals():
-    head = st.columns([6, 1])
+    head = layout_cols([6, 1])
     head[0].subheader("🔔 當前訊號（觀察清單 ＋ 投組庫存）")
     # 局部刷新：只重算本面板（其餘分頁/側欄不重跑），避免每次互動都掃整個觀察宇宙
     if head[1].button("🔄 重新整理", key="refresh_signals", help="只重算當前訊號面板"):
@@ -306,12 +380,12 @@ def panel_backtest(df: pd.DataFrame, item: dict, label: str):
     # 買進持有對照
     bh = float(df["close"].iloc[-1] / df["close"].iloc[0] - 1)
 
-    c = st.columns(4)
+    c = layout_cols(4)
     c[0].metric("策略總報酬", f"{s['total_return']:+.1%}", help=METRIC_GLOSSARY["total_return"])
     c[1].metric("年化報酬", f"{s['annual_return']:+.1%}", help=METRIC_GLOSSARY["annual_return"])
     c[2].metric("Sharpe", f"{s['sharpe']:.2f}", help=METRIC_GLOSSARY["sharpe"])
     c[3].metric("最大回撤", f"{s['max_drawdown']:.1%}", help=METRIC_GLOSSARY["max_drawdown"])
-    c2 = st.columns(4)
+    c2 = layout_cols(4)
     c2[0].metric("勝率", f"{s['win_rate']:.0%}", help=METRIC_GLOSSARY["win_rate"])
     pf = s["profit_factor"]
     c2[1].metric("盈虧比", "∞" if pf == float("inf") else f"{pf:.2f}", help=METRIC_GLOSSARY["profit_factor"])
@@ -324,7 +398,7 @@ def panel_backtest(df: pd.DataFrame, item: dict, label: str):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name="策略淨值", line=dict(color="#3b82f6")))
     fig.add_trace(go.Scatter(x=bh_curve.index, y=bh_curve.values, name="買進持有", line=dict(color="#9ca3af", dash="dash")))
-    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+    fig.update_layout(height=240 if MOBILE else 320, margin=dict(l=10, r=10, t=10, b=10),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -396,11 +470,18 @@ def panel_portfolio():
 
     # ---- 可隱藏的編輯表單（無庫存時自動展開，有庫存時收合）----
     with st.expander("✏️ 編輯庫存（新增 / 修改 / 刪除）", expanded=not holdings):
-        st.caption(
-            "直接新增列 / 改數字 / 刪列，按「💾 儲存」生效（存到 `user_portfolio.json`）。"
-            "「類別」可自訂分組（如 台股 / 美股 / ETF / AI…），留空則依市場自動歸類。"
-            "首次以 `portfolio.yaml` 為初始內容；存過後以你編輯的為準。"
-        )
+        if STATELESS:
+            st.caption(
+                "直接新增列 / 改數字 / 刪列，按「💾 儲存」生效。"
+                "「類別」可自訂分組（如 台股 / 美股 / ETF / AI…），留空則依市場自動歸類。"
+                "⚠ 此為公開試用版：資料只存在本次瀏覽階段，**重整或關閉頁面即歸零**。"
+            )
+        else:
+            st.caption(
+                "直接新增列 / 改數字 / 刪列，按「💾 儲存」生效（存到 `user_portfolio.json`）。"
+                "「類別」可自訂分組（如 台股 / 美股 / ETF / AI…），留空則依市場自動歸類。"
+                "首次以 `portfolio.yaml` 為初始內容；存過後以你編輯的為準。"
+            )
         st.caption("「排序」欄填數字即可重新排列（小→大）；存檔後估值與圖表都依此順序。")
         edit_df = pd.DataFrame(
             [
@@ -495,7 +576,7 @@ def panel_portfolio():
 
     # ---- 篩選（市場 / 類別 / 代號 / 關鍵字；累積套用，下游總計/圓餅連動）----
     with st.expander("🔍 篩選", expanded=False):
-        f = st.columns(3)
+        f = layout_cols(3)
         mkts = sorted(val_df["市場"].unique().tolist())
         picked_mkt = f[0].multiselect("市場", mkts, default=mkts, key="mkt_filter")
         cats = sorted(val_df["類別"].unique().tolist())
@@ -525,7 +606,7 @@ def panel_portfolio():
     unit = "TWD" if fx_ok else ""
     if total_cost > 0:
         tot_pl = total_mv - total_cost
-        m = st.columns(3)
+        m = layout_cols(3)
         m[0].metric(f"總市值 {unit}".strip(), f"{total_mv:,.0f}")
         m[1].metric(f"總損益 {unit}".strip(), f"{tot_pl:,.0f}", f"{tot_pl / total_cost:+.1%}")
         m[2].metric("持股檔數", len(view))
@@ -535,8 +616,12 @@ def panel_portfolio():
             st.caption("⚠ 匯率抓取失敗，未換算，不同幣別直接相加，總計僅供概略參考。")
 
     st.markdown("##### 估值明細")
-    show_cols = ["類別", "標的", "市場", "幣別", "股數", "成本", "現價",
-                 "市值(原幣)", "市值TWD", "損益(原幣)", "報酬率"]
+    if MOBILE:
+        # 手機：精簡欄位避免 10+ 欄橫向捲動（代號 / 市值TWD / 報酬率）
+        show_cols = ["標的", "市值TWD", "報酬率"]
+    else:
+        show_cols = ["類別", "標的", "市場", "幣別", "股數", "成本", "現價",
+                     "市值(原幣)", "市值TWD", "損益(原幣)", "報酬率"]
     st.dataframe(
         view[show_cols], use_container_width=True, hide_index=True,
         column_config={
@@ -548,7 +633,7 @@ def panel_portfolio():
     if not view.empty and float(view["市值TWD"].dropna().sum()) > 0:
         cat_g = view.groupby("類別")["市值TWD"].sum()
         tot = float(cat_g.sum())
-        c1, c2 = st.columns(2)
+        c1, c2 = layout_cols(2)
         with c1:
             st.markdown(f"##### 類別小計（{unit or '原幣混算'}）")
             cat_tbl = cat_g.reset_index()
@@ -557,7 +642,7 @@ def panel_portfolio():
             st.dataframe(cat_tbl, use_container_width=True, hide_index=True)
         with c2:
             fig = go.Figure(data=[go.Pie(labels=cat_g.index, values=cat_g.values, hole=0.4)])
-            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10),
+            fig.update_layout(height=240 if MOBILE else 300, margin=dict(l=10, r=10, t=40, b=10),
                               title=dict(text=f"類別配置（{unit or '原幣'}）", y=0.97))
             st.plotly_chart(fig, use_container_width=True)
 
@@ -597,7 +682,7 @@ def panel_targets(df: pd.DataFrame, item: dict, label: str):
         "展望以目前 K 線週期的「根數」計：短線＝未來 10 根、長線＝未來 120 根。"
     )
 
-    cset = st.columns([1.2, 1, 2])
+    cset = layout_cols([1.2, 1, 2])
     horizon = cset[0].radio("展望", ["短線", "長線"], horizontal=True, key="target_horizon")
     mode = cset[1].radio("顯示", ["簡易", "進階"], horizontal=True, key="target_mode",
                          help="簡易＝三檔目標＋一句結論；進階＝再加投影圖與完整技術目標表（含機率）。")
@@ -621,7 +706,7 @@ def panel_targets(df: pd.DataFrame, item: dict, label: str):
     def _fmt(v: float) -> str:
         return f"{v:,.2f}（{v / rep.spot - 1:+.1%}）"
 
-    c = st.columns(4)
+    c = layout_cols(4)
     c[0].metric("現價", f"{rep.spot:,.2f}")
     c[1].metric("基準（統計中位）", _fmt(rep.base), help="GBM 中位投影價，五五波的中間參考。")
     c[2].metric("保守上檔（第一目標）", _fmt(rep.conservative), help="最接近現價的上檔技術關卡，當第一停利目標。")
@@ -661,7 +746,7 @@ def panel_targets(df: pd.DataFrame, item: dict, label: str):
     fig.add_trace(go.Scatter(x=future, y=lo70, name="70% 區間", fill="tonexty",
                              fillcolor="rgba(59,130,246,0.18)", line=dict(width=0)))
     fig.add_trace(go.Scatter(x=future, y=med, name="中位投影", line=dict(color="#f59e0b", dash="dash")))
-    fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10),
+    fig.update_layout(height=240 if MOBILE else 340, margin=dict(l=10, r=10, t=10, b=10),
                       legend=dict(orientation="h", yanchor="bottom", y=1.02))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -699,10 +784,23 @@ def panel_targets(df: pd.DataFrame, item: dict, label: str):
 # --------------------------------------------------------------------------- #
 st.title("📊 StockBot 看盤儀表板")
 st.caption("技術指標訊號輔助 + 回測。僅供參考，不構成投資建議，不自動下單。")
+if STATELESS:
+    st.info("🌐 公開試用版：你的觀察清單與投資組合只存在本次瀏覽階段，**重整或關閉頁面即全部歸零**，不會記錄任何個人資料。", icon="ℹ️")
 
 options = _watch_options()
 with st.sidebar:
     st.header("設定")
+
+    # ---- 手機版面開關（以 ?m= 記在網址，重整可還原）----
+    if "mobile_mode" not in st.session_state:
+        _qp_m = st.query_params.get("m")
+        st.session_state["mobile_mode"] = _truthy(_qp_m) if _qp_m is not None else False
+    MOBILE = st.toggle(
+        "📱 手機版面", key="mobile_mode",
+        help="窄螢幕用：多欄改單欄堆疊、縮小圖高、投組只留精簡欄位。也可在網址加 ?m=1 直接開。",
+    )
+    st.query_params["m"] = "1" if MOBILE else "0"
+
     # 記住選到的標的：用 ?symbol= 還原（連瀏覽器 F5 都不會跳回第一個）
     labels = list(options.keys())
     qp_sym = st.query_params.get("symbol")

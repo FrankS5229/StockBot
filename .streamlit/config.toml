@@ -1,0 +1,10 @@
+# Streamlit 設定（雲端部署用；不影響本機啟動腳本的行為）
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#3b82f6"

@@ -27,6 +27,7 @@
 | 回測長度/週期選單 | ✅ | 側邊欄可選回測長度(6mo~max)與 K線週期(日/週/月線)；年化基準依週期套用，修掉寫死 252（2026-06-01） |
 | 震盪市策略 | ✅ | `strategy/bollinger.py`：布林通道均值回歸（站回下軌買、回中軌停利/破下軌停損），補順勢策略外的缺口（2026-06-01） |
 | 儀表板 UI 修正 | ✅ | K線子標題與頂部圖例/工具列分離；投組「配置圓餅」移到表格下方、移除庫存改置最底（2026-06-01） |
+| 手機網頁版（無狀態） | ✅ | `STOCKBOT_STATELESS` 旗標：user data 走 session、重整歸零；可注入 store；手機版面重排；`docs/DEPLOY.md`（2026-10-09） |
 
 ---
 
@@ -46,6 +47,28 @@
 - **Step5 收尾**：回測接上 IS/OOS 樣本外對照、`panel_signals` 改 `st.fragment`、新增防 look-ahead 回歸測試。
 
 研究來源（目標價運算機制）：AAII、Chart Guys（Fib 擴展）、Morpher/AvaTrade（Pivot）、Warrior Trading/NetPicks（量度移動 70-120%）、GBM/Monte Carlo 投影文獻。
+
+---
+
+## 2026-10-09：手機網頁版（無狀態雲端部署）
+
+> 計畫檔：`soft-bonbon`。目標＝把既有 Streamlit 儀表板做成手機可開的公開試用版，
+> **單機版行為完全不變**。已通過 QA/QT：`run_all --offline` ALL_TESTS_PASSED（含新增
+> `test_stateless_store` 2 測）；`AppTest` 在預設與 `STOCKBOT_STATELESS=1` 兩模式皆 SMOKE_OK、exceptions=0。
+
+- **可注入 user-data 儲存後端**（`core.py`）：新增 `FileStore`（預設，維持 JSON 寫檔行為）與
+  `use_store()`；`load/save_user_watchlist`、`load/save_user_portfolio` 改委派，
+  `get_portfolio_holdings` 的「是否吃 yaml 種子」改問 `_USER_STORE.portfolio_has_user_data()`。
+  `core` 保持不 import streamlit，CLI/`scanner.py` 無感、向後相容。
+- **無狀態模式**（`dashboard/app.py`）：旗標 `STOCKBOT_STATELESS`（環境變數或 `st.secrets`）為真時注入
+  `SessionStore`（user data 走 `st.session_state`）→ 每瀏覽器分頁獨立、重整即歸零、不寫磁碟、
+  投組**初始完全空白不吃種子**。頂部加公開試用提示，投組編輯提示改為「重整即歸零」。
+- **手機重排**：側欄「📱 手機版面」toggle（或網址 `?m=1`，記在網址可還原）→ `layout_cols()` helper
+  把多欄區塊改單欄堆疊、K 線 780→460／其餘圖 320–340→240、投組明細表精簡為 代號/市值TWD/報酬率。
+- **部署**：新增 `.streamlit/config.toml`（headless/theme）、`docs/DEPLOY.md`（平台比較＋Streamlit
+  Community Cloud 步驟＋Secrets）、`.env.example` 補 `STOCKBOT_STATELESS` 說明。
+- **匿名部署**列為 Step 7（最後步驟，上線前另行討論）：自訂 subdomain + 公開 repo 放暱稱/中性 org +
+  commit 用匿名信箱，讓訪客看不出 owner 是本人。
 
 ---
 

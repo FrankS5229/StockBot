@@ -50,22 +50,64 @@ def load_config(path: str | Path | None = None) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# 使用者自訂 watchlist（存成 JSON，避免破壞 config.yaml 的註解）
+# user-data 儲存後端（可注入）
+# --------------------------------------------------------------------------- #
+# 預設 FileStore：把 watchlist/portfolio 寫成 JSON 檔（單機版行為，與現狀完全一致）。
+# 雲端無狀態版可透過 use_store() 換成 session 後端（見 dashboard/app.py 的 SessionStore）：
+# 每個瀏覽器分頁各自獨立、重整即歸零、不碰磁碟。core 本身不依賴 streamlit。
+class FileStore:
+    """以專案根目錄 JSON 檔保存 user data（單機預設）。"""
+
+    def watchlist_load(self) -> list[dict]:
+        if not USER_WATCHLIST.exists():
+            return []
+        try:
+            return json.loads(USER_WATCHLIST.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def watchlist_save(self, items: list[dict]) -> None:
+        USER_WATCHLIST.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def portfolio_load(self) -> list[dict]:
+        if not USER_PORTFOLIO.exists():
+            return []
+        try:
+            return json.loads(USER_PORTFOLIO.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def portfolio_save(self, items: list[dict]) -> None:
+        USER_PORTFOLIO.write_text(
+            json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def portfolio_has_user_data(self) -> bool:
+        """使用者是否已透過介面存過庫存（決定要不要退回 portfolio.yaml 種子）。"""
+        return USER_PORTFOLIO.exists()
+
+
+_USER_STORE: "FileStore" = FileStore()
+
+
+def use_store(store) -> None:
+    """替換 user-data 儲存後端（雲端無狀態模式用）。store 需實作 FileStore 的介面。"""
+    global _USER_STORE
+    _USER_STORE = store
+
+
+# --------------------------------------------------------------------------- #
+# 使用者自訂 watchlist（委派給 _USER_STORE；預設存成 JSON，避免破壞 config.yaml 的註解）
 # --------------------------------------------------------------------------- #
 def load_user_watchlist() -> list[dict]:
     """讀使用者透過介面加入的標的清單。"""
-    if not USER_WATCHLIST.exists():
-        return []
-    try:
-        return json.loads(USER_WATCHLIST.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
+    return _USER_STORE.watchlist_load()
 
 
 def save_user_watchlist(items: list[dict]) -> None:
-    USER_WATCHLIST.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _USER_STORE.watchlist_save(items)
 
 
 def add_symbol(
@@ -127,18 +169,11 @@ def load_portfolio(path: str | Path | None = None) -> dict | None:
 # --------------------------------------------------------------------------- #
 def load_user_portfolio() -> list[dict]:
     """讀使用者透過介面輸入的庫存清單。"""
-    if not USER_PORTFOLIO.exists():
-        return []
-    try:
-        return json.loads(USER_PORTFOLIO.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
+    return _USER_STORE.portfolio_load()
 
 
 def save_user_portfolio(items: list[dict]) -> None:
-    USER_PORTFOLIO.write_text(
-        json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _USER_STORE.portfolio_save(items)
 
 
 def add_holding(
@@ -181,8 +216,9 @@ def get_portfolio_holdings() -> list[dict]:
     介面可完整新增/修改/刪除，連「全部刪光存成空清單」也成立（不會被 yaml 種子復活）。
     這根治了「portfolio.yaml 來源持股刪不掉 / 刪改後市值損益沒更新」。
     若使用者還沒存過（檔案不存在），則回退到 `portfolio.yaml` 當初始種子。
+    （無狀態後端的 portfolio_has_user_data() 恆為 True → 永遠用 session 空清單、不吃種子。）
     """
-    if USER_PORTFOLIO.exists():
+    if _USER_STORE.portfolio_has_user_data():
         return load_user_portfolio()
     yaml_pf = load_portfolio()
     return (yaml_pf or {}).get("holdings", []) if yaml_pf else []

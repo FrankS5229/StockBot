@@ -12,7 +12,8 @@ import tests.conftest_path  # noqa: F401
 def main():
     offline = "--offline" in sys.argv
     from tests import (
-        test_indicators, test_strategy, test_backtest, test_data, test_core, test_targets
+        test_indicators, test_strategy, test_backtest, test_data, test_core, test_targets,
+        test_stateless_store,
     )
 
     print("=== indicators ===")
@@ -46,6 +47,10 @@ def main():
     test_core.test_portfolio_crud()
     test_core.test_get_portfolio_holdings_user_priority()
     test_core.test_add_symbol_category()
+
+    print("=== stateless store ===")
+    test_stateless_store.test_injected_store_routes_and_resets()
+    test_stateless_store.test_default_store_is_filestore()
 
     print("=== targets ===")
     test_targets.test_norm_cdf_known_values()
